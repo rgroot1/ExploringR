@@ -1,0 +1,3829 @@
+
+SET hive.tez.auto.reducer.parallelism=true;
+
+SET hive.vectorized.execution.enabled=true;
+
+SET hive.exec.parallel=true;
+
+SET hive.exec.dynamic.partition=true;
+
+SET hive.exec.dynamic.partition.mode=nonstrict;
+
+SET hivevar:query_run = v7;
+
+SET hivevar:run_eff = '2018-05-16';
+
+
+
+---MEMBER BASE TABLE
+
+DROP TABLE IF EXISTS dev_er_enc.mem_x_indiv_${query_run};
+
+CREATE TABLE dev_er_enc.mem_x_indiv_${query_run}
+
+STORED AS ORC tblproperties('orc.compress'='SNAPPY')
+
+AS
+
+SELECT DISTINCT
+
+b.individual_id,
+
+a.member_id,
+
+a.mbr_rtp_type_cd,
+
+a.eff_dt,
+
+cast(date_format(a.eff_dt, 'YYYY-MM-16') as date) as run_date,
+
+a.business_ln_cd,
+
+a.fund_ctg_cd,
+
+a.pcp_prvdr_id as pcp_id, 
+
+a.age_nbr,
+
+a.gender_cd,
+
+a.product_ln_cd,
+
+a.group_nbr,
+
+NVL(a.local_mkt_cd, 'unknown') as local_mkt_cd,
+
+a.ntwk_srv_area_id,
+
+CASE WHEN round(months_between(${run_eff}, eff_dt))>=5 THEN 'TRAIN'
+
+WHEN round(months_between(${run_eff}, eff_dt))>=4 AND round(months_between(${run_eff}, eff_dt))<5 THEN 'VALIDATION'
+
+WHEN round(months_between(${run_eff}, eff_dt)) >= 1 AND round(months_between(${run_eff}, eff_dt))<4 THEN 'IGNORE' 
+
+ELSE 'SCORING' END AS model_record_type
+
+FROM edw_enc.edw_prspctv_ems_mbrshp a
+
+LEFT JOIN edw_enc.edw_indvdl_cust_dist b
+
+on a.member_id = b.member_id
+
+LEFT JOIN edw_enc.edw_product_line pl
+
+ON TRIM(a.product_ln_cd) = TRIM(pl.product_ln_cd)
+
+WHERE b.individual_id IS NOT NULL
+
+AND TRIM(pl.product_type_cd) = 'M' 
+
+AND round(months_between(to_date(${run_eff}), a.eff_dt)) BETWEEN 0 AND 24
+
+;
+
+--- 282.71 s
+
+
+
+
+
+---MEMBER HPD stats
+
+DROP TABLE IF EXISTS dev_er_enc.mem_hpd_${query_run};
+
+CREATE TABLE dev_er_enc.mem_hpd_${query_run}
+
+STORED AS ORC tblproperties('orc.compress'='SNAPPY')
+
+AS
+
+select
+
+a.individual_id,
+
+a.run_date,
+
+max(case when mas.disease_cd IN ('MOH') then 1 else 0 end) as MOH, 
+
+max(case when mas.disease_cd IN ('DIA') then 1 else 0 end) as DIA, 
+
+max(case when mas.disease_cd IN ('LBP') then 1 else 0 end) as LBP, 
+
+max(case when mas.disease_cd IN ('AST') then 1 else 0 end) as AST, 
+
+max(case when mas.disease_cd IN ('COP') then 1 else 0 end) as COP, 
+
+max(case when mas.disease_cd IN ('CHD') then 1 else 0 end) as CHD, 
+
+max(case when mas.disease_cd IN ('AFF') then 1 else 0 end) as AFF,
+
+max(case when mas.disease_cd IN ('ALC') then 1 else 0 end) as ALC, 
+
+max(case when mas.disease_cd IN ('ANX') then 1 else 0 end) as ANX,
+
+max(case when mas.disease_cd IN ('BIP') then 1 else 0 end) as BIP,
+
+max(case when mas.disease_cd IN ('CRF') then 1 else 0 end) as CRF,
+
+max(case when mas.disease_cd IN ('DEM') then 1 else 0 end) as DEM,
+
+max(case when mas.disease_cd IN ('DEP') then 1 else 0 end) as DEP,
+
+max(case when mas.disease_cd IN ('EPL') then 1 else 0 end) as EPL,
+
+max(case when mas.disease_cd IN ('HYP') then 1 else 0 end) as HYP,
+
+max(case when mas.disease_cd IN ('IHD') then 1 else 0 end) as IHD,
+
+max(case when mas.disease_cd IN ('IBP') then 1 else 0 end) as IBP,
+
+max(case when mas.disease_cd IN ('OBE') then 1 else 0 end) as OBE,
+
+max(case when mas.disease_cd IN ('PAR') then 1 else 0 end) as PAR,
+
+max(case when mas.disease_cd IN ('SDO') then 1 else 0 end) as SDO,
+
+max(case when mas.disease_cd IN ('NGD') then 1 else 0 end) as NGD
+
+from dev_er_enc.mem_x_indiv_${query_run} a
+
+left join edw_enc.edw_individual_master mas
+
+on a.member_id = mas.member_id
+
+WHERE mas.dm_eligibility_cd in ('Y','H')
+
+AND mas.first_indctn_dt <= cast(a.run_date as date)
+
+GROUP BY a.individual_id, a.run_date;
+
+---96.66 s
+
+
+
+---MEMBER PLAN INFO
+
+DROP TABLE IF EXISTS dev_er_enc.mem_plan_${query_run};
+
+CREATE TABLE dev_er_enc.mem_plan_${query_run}
+
+STORED AS ORC tblproperties('orc.compress'='SNAPPY')
+
+AS
+
+select
+
+a.individual_id,
+
+a.run_date,
+
+max(case when trim(prod.prod_ctg_cd) in ('00','01','46','47','54','56') then 1 else 0 end) as hmo,
+
+max(case when trim(prod.prod_ctg_cd) in ('03','55') then 1 else 0 end) as ppo,
+
+max(nvl(trim(pp.sic_desc), 'unknown')) as plan_sponsor
+
+from dev_er_enc.mem_x_indiv_${query_run} a
+
+left join edw_enc.edw_product_line prod
+
+on a.product_ln_cd = prod.product_ln_cd
+
+left join edw_enc.edw_group_control ctl
+
+on trim(a.group_nbr) = trim(ctl.group_nbr)
+
+left join comm_mktg_enc.co_d_b pp
+
+on cast(ctl.ps_unique_id as bigint) = cast(pp.ps_unique_id as bigint)
+
+group by a.individual_id, a.run_date
+
+;
+
+--- 746.50 s
+
+
+
+---MEMBER UTILIZATION DISTANCE
+
+DROP TABLE IF EXISTS dev_er_enc.mem_util_distance_${query_run};
+
+CREATE TABLE dev_er_enc.mem_util_distance_${query_run}
+
+STORED AS ORC tblproperties('orc.compress'='SNAPPY')
+
+as 
+
+with dist0 as (
+
+SELECT
+
+patient_cumb_id,
+
+percentile_approx(distancecal, 0.5) as avg_dist
+
+from prod_fwa_enc.fraud_analytics_medical_claims
+
+where year(srvc_bgn_dt)>=2015
+
+group by patient_cumb_id
+
+),
+
+dist1 as (
+
+select
+
+a.individual_id,
+
+avg(avg_dist) as avg_dist
+
+from  dev_er_enc.mem_x_indiv_${query_run} a
+
+left join edw_enc.edw_member mem
+
+on a.member_id = mem.member_id
+
+left join dist0 clm
+
+on cast(clm.patient_cumb_id as bigint) = cast(mem.src_cumb_id as bigint)
+
+where patient_cumb_id is not null
+
+group by individual_id
+
+),
+
+dist2 as (
+
+select
+
+split(patient_zip, '-')[0] as patient_zip,
+
+percentile_approx(distancecal, 0.5) as avg_dist
+
+from prod_fwa_enc.fraud_analytics_medical_claims clm
+
+group by split(patient_zip, '-')[0]
+
+),
+
+miss as (
+
+select distinct
+
+base.individual_id
+
+from dev_er_enc.mem_x_indiv_${query_run} base
+
+left join dist1
+
+on base.individual_id = dist1.individual_id
+
+where dist1.individual_id is null
+
+),
+
+miss_dist as (
+
+select
+
+miss.individual_id,
+
+avg(avg_dist) as avg_dist
+
+from miss
+
+left join edw_enc.edw_indvdl_cust_dist ind
+
+on miss.individual_id = ind.individual_id
+
+left join edw_enc.edw_member mem
+
+on ind.member_id = mem.member_id
+
+left join dist2
+
+on trim(mem.zip_cd) = trim(dist2.patient_zip)
+
+group by miss.individual_id
+
+)
+
+select
+
+individual_id,
+
+avg_dist
+
+from dist1
+
+union all
+
+select
+
+individual_id,
+
+avg_dist
+
+from miss_dist
+
+;
+
+---1510.85 s
+
+
+
+
+
+----member risk
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_prosp_risk_${query_run};
+
+CREATE TABLE dev_er_enc.er_model_prosp_risk_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress'='SNAPPY')
+
+AS
+
+WITH tmp1 as(
+
+SELECT *
+
+FROM edw_enc.edw_rg_dmgr_rsksmry_hx rg
+
+WHERE trim(rg.intgtn_typ_cd) = '01'
+
+and trim(rg.rg_ctg_typ_cd) = 'ERG'
+
+and trim(rg.rg_typ_cd) = '001')
+
+SELECT 
+
+cust.individual_id,
+
+max(a.risk_number) as prspctv_rsk_nbr
+
+FROM tmp1 a
+
+JOIN edw_enc.edw_rg_run_summary rs
+
+on a.run_id = rs.run_id
+
+left join edw_enc.edw_indvdl_cust_dist cust
+
+on a.intgtn_value = cust.member_id
+
+WHERE rs.claims_pd_thru_dt<= ${run_eff}
+
+group by cust.individual_id;
+
+---120.74 s
+
+
+
+
+
+----whether has PCP at individual id level
+
+DROP TABLE IF EXISTS dev_er_enc.mem_mon_clms_visits_${query_run};
+
+CREATE TABLE dev_er_enc.mem_mon_clms_visits_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress'='SNAPPY')
+
+AS
+
+WITH 
+
+tmp as (
+
+SELECT DISTINCT
+
+cust.individual_id,
+
+clm.srv_start_dt,
+
+clm.received_dt,
+
+clm.allowed_amt,
+
+clm.srv_spclty_ctg_cd,
+
+clm.plc_srv_ctg_cd,
+
+clm.duplicate_ind,
+
+clm.plc_srv_cd,
+
+clm.srv_prvdr_nsa_id,
+
+clm.hcfa_plc_srv_cd,
+
+clm.prcdr_cd,
+
+clm.srv_prvdr_id
+
+FROM edw_enc.edw_claim_line clm
+
+LEFT JOIN edw_enc.edw_indvdl_cust_dist cust
+
+on clm.member_id = cust.member_id
+
+WHERE trim(clm.summarized_srv_ind) = 'Y'
+
+AND trim(clm.duplicate_ind)='N'
+
+AND cust.individual_id IS NOT NULL
+
+AND trim(clm.srv_spclty_ctg_cd) in ('FP', 'I', 'P')   
+
+AND trim(clm.plc_srv_ctg_cd) IN ('O')
+
+),
+
+tmp2 as (
+
+SELECT
+
+a.individual_id,
+
+a.run_date,
+
+count(1) as clm_ln_counts,
+
+nvl(sum(clm.allowed_amt),0)  as allowed_amt_all_clms,
+
+count(distinct if(p.prcdr_group_nbr = 161 
+
+and round(months_between(a.run_date, clm.srv_start_dt)) BETWEEN 0 AND 12, clm.srv_start_dt, NULL)) as pcp_visits
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN tmp clm
+
+on clm.individual_id=a.individual_id
+
+LEFT JOIN edw_enc.edw_procedure p 
+
+on clm.prcdr_cd = p.prcdr_cd
+
+WHERE datediff(clm.received_dt, a.run_date) < 0
+
+GROUP BY a.individual_id, a.run_date
+
+),
+
+tmp3 as (
+
+SELECT DISTINCT 
+
+a.individual_id,
+
+a.run_date,
+
+last_value(a.pcp_id) over (partition by a.individual_id order by a.run_date rows between unbounded preceding and unbounded following) as pcp_id,
+
+last_value(b.label_nm) over (partition by a.individual_id order by a.run_date rows between unbounded preceding and unbounded following) as label_nm
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN edw_enc.edw_provider_dm b
+
+ON a.pcp_id = b.provider_id
+
+),
+
+tmp4 as (
+
+SELECT
+
+individual_id,
+
+run_date,
+
+count(distinct b.eff_dt) as mnth_cnt_2yr
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+left join edw_enc.edw_prspctv_ems_mbrshp b
+
+on a.member_id = b.member_id
+
+WHERE round(months_between(a.run_date, b.eff_dt))<=24 
+
+GROUP BY individual_id, run_date
+
+)
+
+SELECT
+
+c.individual_id,
+
+c.run_date,
+
+max(CASE WHEN (a.pcp_visits>0 or b.label_nm NOT IN ('NA', 'Unknown')) THEN 1 ELSE 0 END) as has_pcp,
+
+max(c.mnth_cnt_2yr) as mnth_cnt_2yr
+
+FROM tmp4 c 
+
+LEFT JOIN tmp2 a
+
+ON c.individual_id = a.individual_id
+
+and c.run_date = a.run_date
+
+left join tmp3 b
+
+on b.individual_id = c.individual_id
+
+and b.run_date = c.run_date
+
+group by c.individual_id, c.run_date
+
+;
+
+---1297.64 s
+
+ 
+
+ ---pick up from here
+
+
+
+-----MEMBER MEDICAL HISTORY
+
+DROP TABLE IF EXISTS dev_er_enc.mem_prmo_stat_${query_run};
+
+CREATE TABLE dev_er_enc.mem_prmo_stat_${query_run}
+
+STORED AS ORC tblproperties('orc.compress'='SNAPPY')
+
+as
+
+with twf as 
+
+(select
+
+a.individual_id,
+
+a.run_date,
+
+count(distinct if(prc.prcdr_group_nbr in (145, 218, 219, 220), 
+
+clm.srv_start_dt, null)) as lab_cnt_12mo,
+
+max(case when diag.icd9_dx_group_nbr = 49 then 1 else 0 end) as dx49_12mo,
+
+max(case when diag.icd9_dx_group_nbr = 150 then 1 else 0 end) as dx150_12mo,
+
+max(case when diag.icd9_dx_group_nbr = 1090 then 1 else 0 end) as dxc1090_12mo,
+
+max(case when trim(revenue_cd) = '370' then 1 else 0 end) as rev307_12mo,
+
+count(if(prc.prcdr_group_nbr = 239, 1, null)) as prc239_12mo_cnt
+
+from dev_er_enc.mem_x_indiv_${query_run} a
+
+left join edw_enc.edw_claim_line clm
+
+on a.member_id = clm.member_id
+
+left join edw_enc.edw_procedure prc
+
+on trim(clm.prcdr_cd) = trim(prc.prcdr_cd)
+
+left join edw_enc.edw_icd9_diagnosis diag
+
+on trim(clm.pri_icd9_dx_cd) = trim(diag.icd9_dx_cd)
+
+where round(months_between(a.run_date, clm.srv_start_dt)) BETWEEN 0 AND 12
+
+and datediff(clm.received_dt, a.run_date)<0
+
+and trim(clm.summarized_srv_ind) = 'Y'
+
+AND trim(clm.duplicate_ind)='N'
+
+group by a.individual_id, a.run_date
+
+),
+
+twt as (
+
+select
+
+a.individual_id,
+
+a.run_date,
+
+max(case when diag.icd9_dx_group_nbr = 12 then 1 else 0 end) as dx12_24mo,
+
+max(case when diag.icd9_dx_group_nbr = 43 then 1 else 0 end) as dx43_24mo,
+
+max(case when diag.icd9_dx_group_nbr = 131 then 1 else 0 end) as dx131_24mo,
+
+max(case when diag.icd9_dx_group_nbr = 144 then 1 else 0 end) as dx144_24mo,
+
+max(case when diag.icd9_dx_group_nbr = 241 then 1 else 0 end) as dx241_24mo,
+
+max(case when diag.icd9_dx_group_nbr = 247 then 1 else 0 end) as dx247_24mo,
+
+max(case when diag.icd9_dx_group_nbr = 251 then 1 else 0 end) as dx251_24mo,
+
+max(case when prc.prcdr_group_nbr = 139 then 1 else 0 end) as prc139_24mo,
+
+max(case when prc.prcdr_group_nbr = 149 then 1 else 0 end) as prc149_24mo,
+
+max(case when prc.prcdr_group_nbr = 151 then 1 else 0 end) as prc151_24mo,
+
+max(case when prc.prcdr_group_nbr = 153 then 1 else 0 end) as prc153_24mo,
+
+count(if(prc.prcdr_group_nbr = 213, 1, null)) as prc213_24mo_cnt,
+
+max(case when trim(revenue_cd) = '324' then 1 else 0 end) as rev324_24mo,
+
+max(case when trim(clm.plc_srv_ctg_cd) = '0' and prc.prcdr_group_nbr = 161 
+
+and trim(dm.provider_type_cd) not in ('AAA','DB','OO','TE','U','UNK') and trim(dm.type_class_cd) = 'N'
+
+and trim(clm.srv_spclty_ctg_cd) = 'D' then 1 else 0 end) as spcd_2yr
+
+from dev_er_enc.mem_x_indiv_${query_run} a
+
+left join edw_enc.edw_claim_line clm
+
+on a.member_id = clm.member_id
+
+left join edw_enc.edw_procedure prc
+
+on trim(clm.prcdr_cd) = trim(prc.prcdr_cd)
+
+left join edw_enc.edw_icd9_diagnosis diag
+
+on trim(clm.pri_icd9_dx_cd) = trim(diag.icd9_dx_cd)
+
+left join edw_enc.edw_provider_dm dm
+
+on clm.srv_prvdr_id = dm.provider_id
+
+where round(months_between(a.run_date, clm.srv_start_dt)) BETWEEN 0 AND 24
+
+and datediff(clm.received_dt, a.run_date)<0
+
+and trim(clm.summarized_srv_ind) = 'Y'
+
+AND trim(clm.duplicate_ind)='N'
+
+group by a.individual_id, a.run_date
+
+),
+
+six as (
+
+select
+
+a.individual_id,
+
+a.run_date,
+
+max(case when diag.icd9_dx_group_nbr = 20 then 1 else 0 end) as dx20_6mo,
+
+max(case when diag.icd9_dx_group_nbr = 139 then 1 else 0 end) as dx139_6mo,
+
+max(case when prc.prcdr_group_nbr = 133 then 1 else 0 end) as prc133_6mo,
+
+max(case when prc.prcdr_group_nbr = 143 then 1 else 0 end) as prc143_6mo,
+
+max(case when trim(revenue_cd) = '370' then 1 else 0 end) as rev370_6mo
+
+from dev_er_enc.mem_x_indiv_${query_run} a
+
+left join edw_enc.edw_claim_line clm
+
+on a.member_id = clm.member_id
+
+left join edw_enc.edw_procedure prc
+
+on trim(clm.prcdr_cd) = trim(prc.prcdr_cd)
+
+left join edw_enc.edw_icd9_diagnosis diag
+
+on trim(clm.pri_icd9_dx_cd) = trim(diag.icd9_dx_cd)
+
+where round(months_between(a.run_date, clm.srv_start_dt)) BETWEEN 0 AND 6
+
+and datediff(clm.received_dt, a.run_date)<0
+
+and trim(clm.summarized_srv_ind) = 'Y'
+
+AND trim(clm.duplicate_ind)='N'
+
+group by a.individual_id, a.run_date
+
+),
+
+three as (
+
+select
+
+a.individual_id,
+
+a.run_date,
+
+max(case when prc.prcdr_group_nbr = 154 then 1 else 0 end) as prc154_3mo
+
+from dev_er_enc.mem_x_indiv_${query_run} a
+
+left join edw_enc.edw_claim_line clm
+
+on a.member_id = clm.member_id
+
+left join edw_enc.edw_procedure prc
+
+on trim(clm.prcdr_cd) = trim(prc.prcdr_cd)
+
+left join edw_enc.edw_icd9_diagnosis diag
+
+on trim(clm.pri_icd9_dx_cd) = trim(diag.icd9_dx_cd)
+
+where round(months_between(a.run_date, clm.srv_start_dt)) BETWEEN 0 AND 3
+
+and datediff(clm.received_dt, a.run_date)<0
+
+and trim(clm.summarized_srv_ind) = 'Y'
+
+AND trim(clm.duplicate_ind)='N'
+
+group by a.individual_id, a.run_date
+
+)
+
+select
+
+twf.individual_id,
+
+twf.run_date,
+
+lab_cnt_12mo,
+
+dx49_12mo,
+
+dx150_12mo,
+
+dxc1090_12mo,
+
+rev307_12mo,
+
+prc239_12mo_cnt,
+
+dx12_24mo,
+
+dx43_24mo,
+
+dx131_24mo,
+
+dx144_24mo,
+
+dx241_24mo,
+
+dx247_24mo,
+
+dx251_24mo,
+
+prc139_24mo,
+
+prc149_24mo,
+
+prc151_24mo,
+
+prc153_24mo,
+
+prc213_24mo_cnt,
+
+rev324_24mo,
+
+dx20_6mo,
+
+dx139_6mo,
+
+prc133_6mo,
+
+prc143_6mo,
+
+rev370_6mo,
+
+prc154_3mo
+
+from twf 
+
+join twt 
+
+on twf.individual_id = twt.individual_id
+
+and twf.run_date = twt.run_date
+
+join six 
+
+on twf.individual_id = six.individual_id
+
+and twf.run_date = six.run_date
+
+join three 
+
+on twf.individual_id = three.individual_id
+
+and twf.run_date = three.run_date
+
+;
+
+---5026.16 s
+
+
+
+
+
+---member subsrciber amount
+
+DROP TABLE IF EXISTS dev_er_enc.mem_pr12mo_opp_${query_run};
+
+CREATE TABLE dev_er_enc.mem_pr12mo_opp_${query_run}
+
+STORED AS ORC tblproperties('orc.compress'='SNAPPY')
+
+as
+
+with indv as (
+
+select
+
+a.individual_id,
+
+a.run_date,
+
+sum(allowed_amt) - sum(paid_amt) as tot_opp_12mo
+
+from dev_er_enc.mem_x_indiv_${query_run} a
+
+left join edw_enc.edw_claim_line clm
+
+on a.member_id = clm.member_id
+
+where round(months_between(a.run_date, clm.srv_start_dt)) BETWEEN 0 AND 12
+
+and datediff(clm.received_dt, a.run_date)<0
+
+and trim(clm.summarized_srv_ind) = 'Y'
+
+AND trim(clm.duplicate_ind)='N'
+
+group by a.individual_id, a.run_date
+
+),
+
+subs1 as (
+
+select
+
+mem.subscriber_id,
+
+a.run_date,
+
+sum(allowed_amt) - sum(paid_amt) as subs_opp_12mo
+
+from dev_er_enc.mem_x_indiv_${query_run} a
+
+left join edw_enc.edw_claim_line clm
+
+on a.member_id = clm.member_id
+
+left join edw_enc.edw_member mem
+
+on a.member_id = mem.member_id
+
+where round(months_between(a.run_date, clm.srv_start_dt)) BETWEEN 0 AND 12
+
+and datediff(clm.received_dt, a.run_date)<0
+
+and trim(clm.summarized_srv_ind) = 'Y'
+
+AND trim(clm.duplicate_ind)='N'
+
+group by mem.subscriber_id, a.run_date
+
+),
+
+subs2 as (
+
+SELECT
+
+a.individual_id,
+
+a.run_date,
+
+sum(subs_opp_12mo) as tot_subs_opp_12mo
+
+from dev_er_enc.mem_x_indiv_${query_run} a
+
+left join edw_enc.edw_member mem
+
+on a.member_id = mem.member_id
+
+left join subs1
+
+on mem.subscriber_id = subs1.subscriber_id
+
+group by a.individual_id, a.run_date
+
+)
+
+select
+
+indv.individual_id,
+
+indv.run_date,
+
+indv.tot_opp_12mo,
+
+subs2.tot_subs_opp_12mo
+
+from indv
+
+left join subs2 
+
+on indv.individual_id = subs2.individual_id
+
+;
+
+--- 367.00 s
+
+
+
+
+
+---PCP load
+
+DROP TABLE IF EXISTS dev_er_enc.pcp_load_${query_run};
+
+CREATE TABLE dev_er_enc.pcp_load_${query_run}
+
+STORED AS ORC tblproperties('orc.compress'='SNAPPY')
+
+as
+
+with 
+
+zip as (
+
+select distinct 
+
+zip_cd
+
+from edw_enc.edw_emis_membership
+
+),
+
+months as (
+
+select distinct 
+
+run_date
+
+from dev_er_enc.mem_x_indiv_${query_run}
+
+),
+
+zm as (
+
+select
+
+*
+
+from zip
+
+join months
+
+),
+
+p1 as (
+
+select 
+
+zip_cd,
+
+run_date,
+
+count(if(p.prcdr_group_nbr = 161 and trim(clm.srv_spclty_ctg_cd) in ('FP', 'I', 'P')
+
+and trim(clm.plc_srv_ctg_cd) = 'O', clm.claim_line_id, null)) as pcp_1mo 
+
+from zm
+
+left join edw_enc.edw_claim_line clm
+
+on trim(zm.zip_cd) = trim(clm.subs_zip_cd)
+
+left join edw_enc.edw_procedure p 
+
+on clm.prcdr_cd = p.prcdr_cd
+
+where datediff(clm.received_dt, run_date)<0
+
+and trim(clm.summarized_srv_ind) = 'Y'
+
+and trim(clm.duplicate_ind)='N'
+
+and round(months_between(run_date, clm.srv_start_dt)) = 1
+
+group by zip_cd, run_date
+
+),
+
+p12 as (
+
+select 
+
+zip_cd,
+
+run_date,
+
+count(if(p.prcdr_group_nbr = 161 and trim(clm.srv_spclty_ctg_cd) in ('FP', 'I', 'P')
+
+and trim(clm.plc_srv_ctg_cd) = 'O', clm.claim_line_id, null))/3 as pcp_12mo_avg 
+
+from zm
+
+left join edw_enc.edw_claim_line clm
+
+on trim(zm.zip_cd) = trim(clm.subs_zip_cd)
+
+left join edw_enc.edw_procedure p 
+
+on clm.prcdr_cd = p.prcdr_cd
+
+where datediff(clm.received_dt, run_date)<0
+
+and trim(clm.summarized_srv_ind) = 'Y'
+
+and trim(clm.duplicate_ind)='N'
+
+and round(months_between(run_date, clm.srv_start_dt)) between 11 and 13
+
+group by zip_cd, run_date
+
+)
+
+select
+
+p12.*,
+
+p1.pcp_1mo
+
+from p12
+
+full outer join p1
+
+on trim(p1.zip_cd) = trim(p12.zip_cd)
+
+and p1.run_date = p12.run_date
+
+;
+
+---2065.05 s
+
+
+
+
+
+----GPI rx history
+
+DROP TABLE IF EXISTS dev_er_enc.gpi4_pri_${query_run};
+
+CREATE TABLE dev_er_enc.gpi4_pri_${query_run}
+
+STORED AS ORC tblproperties('orc.compress'='SNAPPY')
+
+as
+
+with gpi2y as (
+
+select
+
+individual_id,
+
+run_date,
+
+max(case when substr(trim(adjudicated_gpi_cd),1,2)='57' and days_supply_cnt>0
+
+then 1 else 0 end) as gpi2_57_2yr,
+
+max(case when substr(trim(adjudicated_gpi_cd),1,4)='1600' and days_supply_cnt>0
+
+then 1 else 0 end) as gpi4_1600_2yr,
+
+max(case when substr(trim(adjudicated_gpi_cd),1,4)='1710' and days_supply_cnt>0
+
+then 1 else 0 end) as gpi4_1710_2yr
+
+from dev_er_enc.mem_x_indiv_${query_run} base
+
+left join edw_enc.edw_rx_claim_dtl rx
+
+on base.member_id = rx.member_id
+
+where round(months_between(base.run_date, rx.disp_dt)) BETWEEN 0 AND 24
+
+group by individual_id, run_date
+
+),
+
+gpi1y as (
+
+select
+
+individual_id,
+
+run_date,
+
+max(case when substr(trim(adjudicated_gpi_cd),1,4)='3720' and days_supply_cnt>0
+
+ then 1 else 0 end) as gpi4_3720_1yr
+
+from dev_er_enc.mem_x_indiv_${query_run} base
+
+left join edw_enc.edw_rx_claim_dtl rx
+
+on base.member_id = rx.member_id
+
+where round(months_between(base.run_date, rx.disp_dt)) BETWEEN 0 AND 12
+
+group by individual_id, run_date
+
+),
+
+gpi6mo as (
+
+select
+
+individual_id,
+
+run_date,
+
+max(case when substr(trim(adjudicated_gpi_cd),1,2)='72' and days_supply_cnt>0
+
+ then 1 else 0 end) as gpi2_72_6mo,
+
+max(case when substr(trim(adjudicated_gpi_cd),1,4)='3320' and days_supply_cnt>0
+
+ then 1 else 0 end) as gpi4_3320_6mo
+
+from dev_er_enc.mem_x_indiv_${query_run} base
+
+left join edw_enc.edw_rx_claim_dtl rx
+
+on base.member_id = rx.member_id
+
+where round(months_between(base.run_date, rx.disp_dt)) BETWEEN 0 AND 6
+
+group by individual_id, run_date
+
+),
+
+gpi3mo as (
+
+select
+
+individual_id,
+
+run_date,
+
+max(case when substr(trim(adjudicated_gpi_cd),1,2)='65' and days_supply_cnt>0
+
+then 1 else 0 end) as gpi2_65_3mo
+
+from dev_er_enc.mem_x_indiv_${query_run} base
+
+left join edw_enc.edw_rx_claim_dtl rx
+
+on base.member_id = rx.member_id
+
+where round(months_between(base.run_date, rx.disp_dt)) BETWEEN 0 AND 3
+
+group by individual_id, run_date
+
+)
+
+select
+
+gpi2y.*,
+
+gpi1y.gpi4_3720_1yr,
+
+gpi6mo.gpi2_72_6mo,
+
+gpi6mo.gpi4_3320_6mo,
+
+gpi3mo.gpi2_65_3mo
+
+from gpi2y
+
+left join gpi1y
+
+on gpi2y.individual_id = gpi1y.individual_id
+
+and gpi2y.run_date = gpi1y.run_date
+
+left join gpi6mo
+
+on gpi2y.individual_id = gpi6mo.individual_id
+
+and gpi2y.run_date = gpi6mo.run_date
+
+left join gpi3mo
+
+on gpi2y.individual_id = gpi3mo.individual_id
+
+and gpi2y.run_date = gpi3mo.run_date
+
+;
+
+---194.35 s
+
+
+
+
+
+----First time PGT
+
+DROP TABLE IF EXISTS dev_er_enc.pgt_first_${query_run};
+
+CREATE TABLE dev_er_enc.pgt_first_${query_run}
+
+STORED AS ORC tblproperties('orc.compress'='SNAPPY')
+
+as
+
+select
+
+individual_id,
+
+run_date,
+
+max(case when pg.prcdr_group_nbr=811 and round(months_between(base.run_date, pg.first_indctn_dt)) >= 24
+
+then 1 else 0 end) as pgt811_2pyr,
+
+max(case when pg.prcdr_group_nbr=59 and round(months_between(base.run_date, pg.first_indctn_dt)) between 0 and 6
+
+then 1 else 0 end) as pgt59_6mo
+
+from dev_er_enc.mem_x_indiv_${query_run} base
+
+left join edw_enc.edw_prc_grp_trk_intgtn pg
+
+on base.member_id = pg.intgtn_value
+
+group by individual_id, run_date
+
+;
+
+---75.10 s
+
+
+
+
+
+---------PCP HHI
+
+SET hivevar:observation_period=24;
+
+DROP TABLE IF EXISTS dev_er_enc.er_pcp_hhi_1yr_${query_run};
+
+CREATE TABLE dev_er_enc.er_pcp_hhi_1yr_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress'='SNAPPY')
+
+AS
+
+With tmp1 AS
+
+(SELECT 
+
+a.individual_id, 
+
+a.run_date, 
+
+ecl.srv_prvdr_id,
+
+count(*) as pcp_1yr
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN edw_enc.edw_claim_line ecl
+
+ON a.member_id=ecl.member_id
+
+LEFT JOIN edw_enc.edw_procedure as ep    
+
+on ecl.prcdr_cd=ep.prcdr_cd
+
+LEFT JOIN edw_enc.edw_provider_dm as epd
+
+on ecl.srv_prvdr_id=epd.provider_id
+
+WHERE trim(ecl.summarized_srv_ind)='Y' 
+
+AND trim(ecl.duplicate_ind)='N' 
+
+AND datediff(ecl.received_dt, a.run_date)<0
+
+AND trim(ecl.plc_srv_ctg_cd)='O'
+
+AND trim(ecl.srv_spclty_ctg_cd) in ('FP','I','P')
+
+and ep.prcdr_group_nbr=161
+
+and round(months_between(a.run_date, ecl.srv_start_dt)) BETWEEN 0 AND 12
+
+GROUP BY a.individual_id, a.run_date, ecl.srv_prvdr_id),
+
+tmp2 AS
+
+(SELECT 
+
+a.individual_id, 
+
+a.run_date,
+
+sum(pcp_1yr) as pcp_1yr_cnt
+
+FROM tmp1 as a
+
+GROUP BY a.individual_id, a.run_date),
+
+tmp3 AS
+
+(SELECT DISTINCT 
+
+a.individual_id, 
+
+a.run_date,
+
+b.srv_prvdr_id,
+
+case when a.pcp_1yr_cnt>0 then power(b.pcp_1yr/a.pcp_1yr_cnt,2) else 0 end as pcp_1yr_ratio_sq
+
+FROM tmp2 as a
+
+INNER JOIN tmp1 as b 
+
+ON a.individual_id=b.individual_id
+
+AND a.run_date=b.run_date)
+
+SELECT 
+
+mem.individual_id, 
+
+mem.run_date,
+
+sum(a.pcp_1yr_ratio_sq) as pcp_hhi_1yr
+
+FROM dev_er_enc.mem_x_indiv_${query_run} mem
+
+LEFT JOIN tmp3 as a
+
+ON mem.individual_id=a.individual_id
+
+AND mem.run_date=a.run_date
+
+GROUP BY mem.individual_id, mem.run_date;
+
+---463.22 s
+
+
+
+
+
+
+
+----ER address
+
+DROP TABLE IF EXISTS dev_er_enc.er_addr_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_addr_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY')AS 
+
+WITH er_prvdr AS (
+
+SELECT
+
+srvc_prvdr_pin as prvdr_id_no,
+
+srvc_prvdr_addr_nbr as addr_no,
+
+count(1) as claims
+
+FROM prod_fwa_enc.fraud_analytics_medical_claims
+
+WHERE datediff(current_date, srvc_bgn_dt) between 0 AND 180
+
+AND pos_cd = 23
+
+AND TRIM(srvc_prvdr_type) in ('HO','CH')
+
+GROUP BY srvc_prvdr_pin, srvc_prvdr_addr_nbr)
+
+SELECT DISTINCT 
+
+pv.prvdr_id_no,
+
+pv.addr_no,
+
+cast(e.ntwk_id_no as int) as ntwk_id_no,
+
+g.g_lat,
+
+g.g_lon,
+
+sin(radians(g.g_lat)) as sin_er_lat,
+
+cos(radians(g.g_lat)) as cos_er_lat,
+
+SUBSTRING(g.geohash_5_digit, 1, 4) as geohash_4_digit
+
+FROM er_prvdr pv
+
+JOIN epdb_enc.epdb_prvtins e
+
+ON pv.prvdr_id_no = e.prvdr_id_no
+
+AND pv.addr_no = e.addr_no
+
+AND year(e.prvtins_exprtn_dt) = 9999
+
+AND TRIM(e.prvtins_prvnm_ty_c) = 'M'
+
+JOIN prod_insights_consumption_enc.geocode_epdb_active_provider g
+
+ON g.prvdr_id_no = pv.prvdr_id_no
+
+AND g.addr_no = e.addr_no
+
+AND TRIM(g.qc) = 'pass'
+
+AND TRIM(g.prvdr_status_cd) = 'A';
+
+
+
+
+
+----UCC address
+
+DROP TABLE IF EXISTS dev_er_enc.ucc_addr_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.ucc_addr_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY') AS 
+
+WITH uc_prvdr as (
+
+SELECT
+
+srvc_prvdr_pin as prvdr_id_no,
+
+srvc_prvdr_addr_nbr as addr_no,
+
+count(1) as claims
+
+FROM prod_fwa_enc.fraud_analytics_medical_claims
+
+WHERE datediff(current_date, srvc_bgn_dt) between 0 AND 365
+
+GROUP BY srvc_prvdr_pin, srvc_prvdr_addr_nbr)
+
+SELECT DISTINCT
+
+pv.prvdr_id_no,
+
+pv.addr_no,
+
+cast(e.ntwk_id_no as int) AS ntwk_id_no,
+
+nvl(pv.claims, 0) as recent_claims,
+
+g.g_lat,
+
+g.g_lon,
+
+sin(radians(g.g_lat)) as sin_uc_lat,
+
+cos(radians(g.g_lat)) as cos_uc_lat,
+
+SUBSTRING(g.geohash_5_digit, 1, 4) as geohash_4_digit
+
+FROM uc_prvdr pv
+
+JOIN epdb_enc.epdb_prvtins e
+
+ON pv.prvdr_id_no = e.prvdr_id_no
+
+AND pv.addr_no = e.addr_no
+
+AND year(e.prvtins_exprtn_dt) = 9999
+
+AND TRIM(e.prvtins_prvnm_ty_c) = 'M'
+
+AND trim(e.prvty_cd) = 'UC'
+
+JOIN prod_insights_consumption_enc.geocode_epdb_active_provider g
+
+ON g.prvdr_id_no = pv.prvdr_id_no
+
+AND g.addr_no = e.addr_no
+
+AND TRIM(g.qc) = 'pass'
+
+AND TRIM(g.prvdr_status_cd) = 'A';
+
+---73.78 s
+
+
+
+
+
+----Member siblings and U/S/R
+
+-- DROP TABLE IF EXISTS dev_er_enc.mem_sibling_usps_${query_run};
+
+-- CREATE TABLE IF NOT EXISTS dev_er_enc.mem_sibling_usps_${query_run}
+
+-- STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY') AS 
+
+-- with sub as (
+
+-- select
+
+-- subscriber_id,
+
+-- count(distinct if(trim(mbr_rtp_type_cd) = 'C', member_id, null)) as child_num
+
+-- from edw_enc.edw_member
+
+-- group by subscriber_id
+
+-- )
+
+-- select distinct
+
+-- a.individual_id,
+
+-- sub.child_num - 1 as sib_num,
+
+-- c.urbsubr
+
+-- from dev_er_enc.mem_x_indiv_${query_run} a
+
+-- left join edw_enc.edw_member b
+
+-- on a.member_id = b.member_id
+
+-- left join sub
+
+-- on b.subscriber_id = sub.subscriber_id
+
+-- left join dev_phm_enc.zip_census_usps_urbrur c
+
+-- on cast(b.zip_cd as int) = cast(c.zip_cd as int)
+
+-- ;
+
+
+
+
+
+----add demographics info
+
+SET hive.merge.tezfiles=true;
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_cohort_demo_training_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_cohort_demo_training_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY')AS 
+
+WITH mem AS
+
+(SELECT DISTINCT 
+
+a.individual_id,
+
+a.run_date, 
+
+e.subscriber_id,
+
+e.zip_cd,
+
+b.medianhhincome,
+
+a.mbr_rtp_type_cd AS relation,
+
+max(if(a.mbr_rtp_type_cd IN ('S', 'P', 'X'), 1, 0)) over (partition BY e.subscriber_id, a.eff_dt) AS marital_status,
+
+max(if(a.mbr_rtp_type_cd = 'C' and a.age_nbr <= 2, 1, 0)) over (partition by e.subscriber_id, a.eff_dt) as infant_ind,
+
+sum(if(a.mbr_rtp_type_cd = 'C', 1, 0)) over (partition BY e.subscriber_id, a.eff_dt) AS num_children
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+left join edw_enc.edw_unmask_member e
+
+on a.member_id = e.member_id
+
+LEFT JOIN (SELECT DISTINCT zip_cd, medianhhincome FROM ylm_enc.ylm_census_2016) b
+
+ON e.zip_cd=b.zip_cd
+
+)
+
+SELECT a.*, 
+
+c.medianhhincome,
+
+c.infant_ind,
+
+c.zip_cd,
+
+trim(us.state_postal_cd) as st,
+
+cast(us.urbsubr as string) as urbsubr,
+
+CASE WHEN c.marital_status=1 AND c.num_children>0  THEN 'parent with child' 
+
+WHEN c.marital_status=1 AND c.num_children=0  THEN 'couple no child' 
+
+WHEN c.marital_status=0 AND c.num_children>0   THEN 'single parent with child'
+
+WHEN c.marital_status=0 AND c.num_children=0   THEN 'single' 
+
+ELSE 'others' END AS family_type 
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN mem c
+
+ON a.individual_id=c.individual_id
+
+AND a.run_date=c.run_date
+
+left join dev_phm_enc.zip_census_usps_urbrur us
+
+on cast(c.zip_cd as int) = cast(us.zip_cd as int)
+
+;
+
+---344.43 s
+
+
+
+training
+
+SET hive.vectorized.execution.enabled=true;
+
+SET hive.exec.parallel=true;
+
+SET hive.tez.auto.reducer.parallelism=true;
+
+
+
+SET hivevar:recent_days_er=30;
+
+SET hivevar:recent_days_uc=90;
+
+SET hivevar:ref_tbl=training;
+
+
+
+
+
+---determine preventable and unnecessary ER
+
+-- SET hivevar:preventable_er_threshold=0.5;
+
+-- SET hivevar:unnecessary_er_threshold=0.85;
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_med_case_x_clm_x_icd_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_med_case_x_clm_x_icd_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY')
+
+AS
+
+with tmp as (
+
+SELECT DISTINCT 
+
+a.member_id,
+
+a.med_case_start_dt,
+
+clm.received_dt,
+
+a.total_allowed_amt,
+
+a.total_paid_amt,
+
+a.icd9_dx_cd,
+
+from_unixtime(unix_timestamp(a.med_case_start_dt,'yyyy-MM-dd'),'E') as weekday,
+
+trim(a.subs_st_postal_cd) as st
+
+FROM edw_enc.edw_medical_case a 
+
+LEFT JOIN edw_enc.edw_med_case_x_clm_ln c
+
+ON a.medical_case_id=c.medical_case_id
+
+LEFT JOIN edw_enc.edw_claim_line clm
+
+ON c.claim_line_id=clm.claim_line_id
+
+WHERE a.dummy_mbr_id_ind = 'N' 
+
+AND trim(clm.duplicate_ind) = 'N'
+
+AND a.product_ln_cd!= '13' 
+
+AND  a.med_cs_ps_ctg_cd='E' 
+
+AND YEAR(a.med_case_start_dt) BETWEEN 2015 AND 2018
+
+),
+
+tmp2 as (
+
+select
+
+member_id,
+
+med_case_start_dt,
+
+max(received_dt) as received_dt
+
+from tmp
+
+group by member_id, med_case_start_dt
+
+)
+
+SELECT DISTINCT 
+
+a.member_id,
+
+a.med_case_start_dt,
+
+c.received_dt,
+
+a.icd9_dx_cd,
+
+a.total_allowed_amt,
+
+a.total_paid_amt,
+
+a.weekday,
+
+a.st,
+
+b.er_type,
+
+case when trim(b.er_type) = 'DRUG/ALCOHOL' then 1 else 0 end as drug_alcohol,
+
+case when trim(b.er_type) = 'PSYCH' then 1 else 0 end as psych,
+
+case when trim(b.er_type) = 'PREVENTABLE' then a.med_case_start_dt else NULL end as preventable_er,
+
+case when trim(b.er_type) = 'UNNECESSARY' THEN a.med_case_start_dt else NULL end AS unnecessary_er,
+
+CASE WHEN trim(b.er_type) = 'PREVENTABLE' THEN 'Y' else 'N' end AS is_preventable,
+
+CASE WHEN trim(b.er_type) = 'UNNECESSARY' THEN 'Y' else 'N' end AS is_unnecessary,
+
+case when trim(b.avoidable_ind) = 'Y' then 1 else 0 end as avoidable_er,
+
+case when trim(b.er_type) = 'INJURY' and trim(b.avoidable_ind) = 'Y' then 'Y' else 'N' end as is_injury,
+
+case when trim(b.er_type) = 'INJURY' and trim(b.avoidable_ind) = 'Y' then a.med_case_start_dt else null end as avd_injury,
+
+case when trim(b.er_type) = 'INJURY' and trim(b.avoidable_ind) = 'N' then 1 else 0 end as navd_injury
+
+-- b.er_needed_not_prevent,   
+
+-- b.er_needed_prevent,
+
+-- b.emergent_pc_treat,
+
+-- b.non_emergent,   
+
+-- b.alcohol,  
+
+-- b.drug,      
+
+-- b.injury,
+
+-- b.psych,     
+
+-- b.unclassified,
+
+-- CASE WHEN b.er_needed_prevent >= ${preventable_er_threshold} THEN a.med_case_start_dt else NULL end AS preventable_er,
+
+-- CASE WHEN (b.emergent_pc_treat + b.non_emergent)>=${unnecessary_er_threshold} THEN a.med_case_start_dt else NULL end AS unnecessary_er,
+
+-- CASE WHEN b.er_needed_prevent >= ${preventable_er_threshold} THEN 'Y' else 'N' end AS is_preventable,
+
+-- CASE WHEN (b.emergent_pc_treat + b.non_emergent)>=${unnecessary_er_threshold} THEN 'Y' else 'N' end AS is_unnecessary
+
+FROM tmp a
+
+left join tmp2 c
+
+on a.member_id = c.member_id
+
+and a.med_case_start_dt = c.med_case_start_dt
+
+-- LEFT JOIN dev_segmentation_enc.nyu_icd_comb b 
+
+-- ON TRIM(a.icd9_dx_cd) = TRIM(b.dx_cd)
+
+left join dev_er_enc.icd10_x_er_type b 
+
+on trim(a.icd9_dx_cd) =trim(b.dx_cd)
+
+where total_paid_amt>=0
+
+;
+
+--- 106.83 s
+
+
+
+
+
+-----ER in previous 6 mo
+
+SET hive.merge.tezfiles=false;
+
+SET hivevar:month_window=6;
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_cohort_prior_${month_window}_mo_er_visits_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_cohort_prior_${month_window}_mo_er_visits_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY')
+
+AS 
+
+SELECT 
+
+a.individual_id, 
+
+a.run_date,
+
+NVL(COUNT(DISTINCT b.unnecessary_er),0) AS pry_${month_window}m_avd_er, 
+
+SUM(CASE WHEN b.unnecessary_er IS NOT NULL THEN b.total_allowed_amt else 0 end ) AS pry_${month_window}m_allowed_amt_avoid,
+
+NVL(COUNT(DISTINCT b.avd_injury),0) AS pry_${month_window}m_injury_er, 
+
+SUM(CASE WHEN b.avd_injury IS NOT NULL THEN b.total_allowed_amt else 0 end ) AS pry_${month_window}m_allowed_amt_injury,
+
+NVL(COUNT(DISTINCT b.preventable_er),0) AS pry_${month_window}m_pvt_er, 
+
+SUM(CASE WHEN b.preventable_er IS NOT NULL THEN b.total_allowed_amt else 0 end ) AS pry_${month_window}m_allowed_amt_prevent,
+
+NVL(COUNT(DISTINCT b.med_case_start_dt),0) AS pry_${month_window}m_er, 
+
+NVL(SUM(b.total_allowed_amt),0) AS pry_${month_window}m_allowed_amt_all_er,
+
+max(b.med_case_start_dt) as last_visit,
+
+nvl(count(distinct if (b.weekday in ('Sat', 'Sun'), med_case_start_dt, null)),0) as weekend_er,
+
+nvl(count(distinct if (b.weekday in ('Sat', 'Sun') and b.is_injury ='Y', med_case_start_dt, null)),0) as weekend_injury_er, 
+
+round(months_between(a.run_date, max(b.med_case_start_dt))) as mnths_since_er,
+
+round(months_between(a.run_date, CASE WHEN max(b.is_unnecessary) IN ('N') THEN cast(null as date) else cast(max(b.unnecessary_er) as date) END)) as mnths_since_avd_er,
+
+round(datediff(a.run_date, max(b.med_case_start_dt))) as days_since_er,
+
+round(datediff(a.run_date, CASE WHEN max(b.is_unnecessary) IN ('N') THEN cast(null as date) else cast(max(b.unnecessary_er) as date) END)) as days_since_avd_er,
+
+round(datediff(a.run_date, CASE WHEN max(b.is_injury) IN ('N') THEN cast(null as date) else cast(max(b.avd_injury) as date) END)) as days_since_injury_er
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN dev_er_enc.er_model_med_case_x_clm_x_icd_${query_run} b
+
+ON a.member_id=b.member_id
+
+WHERE a.run_date > b.med_case_start_dt
+
+AND round(months_between(a.run_date, b.med_case_start_dt)) BETWEEN 0 AND ${month_window}  
+
+AND datediff(b.received_dt, a.run_date)<0
+
+AND YEAR(b.med_case_start_dt) BETWEEN 2015 AND 2018   
+
+GROUP BY a.individual_id, a.run_date
+
+;
+
+--- 53.49 s
+
+
+
+-----Flag members' preivous ER catg
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_cohort_prior_flag_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_cohort_prior_flag_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY')
+
+AS 
+
+with six as (
+
+select
+
+a.individual_id, 
+
+a.run_date,
+
+max(case when b.unnecessary_er is not null then 1 else 0 end) as has_unnecessary_6mo,
+
+max(case when b.preventable_er is not null then 1 else 0 end) as has_preventable_6mo,
+
+max(case when b.avd_injury is not null then 1 else 0 end) as has_injury_6mo
+
+from dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN dev_er_enc.er_model_med_case_x_clm_x_icd_${query_run} b
+
+ON a.member_id=b.member_id
+
+WHERE a.run_date > b.med_case_start_dt
+
+AND round(months_between(a.run_date, b.med_case_start_dt)) BETWEEN 0 AND 6  
+
+AND datediff(b.received_dt, a.run_date)<0
+
+AND YEAR(b.med_case_start_dt) BETWEEN 2014 AND 2018   
+
+GROUP BY a.individual_id, a.run_date
+
+),
+
+twf as (
+
+select
+
+a.individual_id, 
+
+a.run_date,
+
+max(case when b.unnecessary_er is not null then 1 else 0 end) as has_unnecessary_12mo,
+
+max(case when b.preventable_er is not null then 1 else 0 end) as has_preventable_12mo,
+
+max(case when b.avd_injury is not null then 1 else 0 end) as has_injury_12mo
+
+from dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN dev_er_enc.er_model_med_case_x_clm_x_icd_${query_run} b
+
+ON a.member_id=b.member_id
+
+WHERE a.run_date > b.med_case_start_dt
+
+AND round(months_between(a.run_date, b.med_case_start_dt)) BETWEEN 0 AND 12  
+
+AND datediff(b.received_dt, a.run_date)<0
+
+AND YEAR(b.med_case_start_dt) BETWEEN 2014 AND 2018  
+
+GROUP BY a.individual_id, a.run_date
+
+),
+
+tf as (
+
+SELECT
+
+individual_id,
+
+run_date,
+
+nvl(count(distinct med_case_start_dt)/24, 0) as er_case_2yr_pm
+
+from dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN dev_er_enc.er_model_med_case_x_clm_x_icd_${query_run} b
+
+ON a.member_id=b.member_id
+
+WHERE a.run_date > b.med_case_start_dt
+
+AND round(months_between(a.run_date, b.med_case_start_dt)) BETWEEN 0 AND 24  
+
+AND datediff(b.received_dt, a.run_date)<0
+
+AND YEAR(b.med_case_start_dt) BETWEEN 2014 AND 2018   
+
+GROUP BY a.individual_id, a.run_date
+
+)
+
+select
+
+twf.*,
+
+six.has_unnecessary_6mo,
+
+six.has_preventable_6mo,
+
+six.has_injury_6mo,
+
+tf.er_case_2yr_pm
+
+from twf 
+
+left join six
+
+on twf.individual_id = six.individual_id
+
+and twf.run_date = six.run_date
+
+left join tf
+
+on twf.individual_id = tf.individual_id
+
+and twf.run_date = tf.run_date
+
+;
+
+---70.57 s
+
+
+
+
+
+----Outcome variable
+
+SET hivevar:month_window=3;
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_cohort_post_${month_window}_mo_er_visits_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_cohort_post_${month_window}_mo_er_visits_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY') AS
+
+with 
+
+tmp as (
+
+SELECT 
+
+a.individual_id, 
+
+a.run_date,
+
+NVL(COUNT(DISTINCT b.unnecessary_er),0) AS pst_${month_window}m_avd_er,
+
+SUM(CASE WHEN b.unnecessary_er IS NOT NULL THEN b.total_allowed_amt else 0 end ) AS pst_${month_window}m_allowed_amt_avoid,
+
+SUM(CASE WHEN b.unnecessary_er IS NOT NULL THEN b.total_paid_amt else 0 end ) AS pst_${month_window}m_paid_amt_avoid,
+
+NVL(COUNT(DISTINCT b.preventable_er),0) AS pst_${month_window}m_pvt_er,
+
+SUM(CASE WHEN b.preventable_er IS NOT NULL THEN b.total_allowed_amt else 0 end ) AS pst_${month_window}m_allowed_amt_prevent,
+
+SUM(CASE WHEN b.preventable_er IS NOT NULL THEN b.total_paid_amt else 0 end ) AS pst_${month_window}m_paid_amt_prevent,
+
+NVL(COUNT(DISTINCT b.avd_injury),0) AS pst_${month_window}m_injury_er,
+
+SUM(CASE WHEN b.avd_injury IS NOT NULL THEN b.total_allowed_amt else 0 end ) AS pst_${month_window}m_allowed_amt_injury,
+
+SUM(CASE WHEN b.avd_injury IS NOT NULL THEN b.total_paid_amt else 0 end ) AS pst_${month_window}m_paid_amt_injury,
+
+NVL(COUNT(DISTINCT b.med_case_start_dt),0) AS pst_${month_window}m_er,
+
+NVL(SUM(b.total_allowed_amt),0) AS pst_${month_window}m_allowed_amt_all_er
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN dev_er_enc.er_model_med_case_x_clm_x_icd_${query_run} b
+
+ON a.member_id=b.member_id      
+
+WHERE b.med_case_start_dt>=a.run_date
+
+AND round(months_between(b.med_case_start_dt, a.run_date))<= ${month_window}  
+
+AND YEAR(b.med_case_start_dt) BETWEEN 2015 AND 2018
+
+GROUP BY a.individual_id, a.run_date
+
+)
+
+SELECT
+
+tmp.*,
+
+nvl(pst_${month_window}m_allowed_amt_avoid/pst_${month_window}m_avd_er, 0) as aer_allowed_per_visit,
+
+nvl(pst_${month_window}m_allowed_amt_prevent/pst_${month_window}m_pvt_er, 0) as per_allowed_per_visit,
+
+nvl(pst_${month_window}m_allowed_amt_injury/pst_${month_window}m_injury_er, 0) as ier_allowed_per_visit,
+
+nvl(pst_${month_window}m_paid_amt_avoid/pst_${month_window}m_avd_er, 0) as aer_paid_per_visit,
+
+nvl(pst_${month_window}m_paid_amt_prevent/pst_${month_window}m_pvt_er, 0) as per_paid_per_visit,
+
+nvl(pst_${month_window}m_paid_amt_injury/pst_${month_window}m_injury_er, 0) as ier_paid_per_visit,
+
+case when pst_${month_window}m_avd_er >0 then 1 else 0 end as pst_has_avd,
+
+case when pst_${month_window}m_pvt_er >0 then 1 else 0 end as pst_has_pvt,
+
+case when pst_${month_window}m_injury_er >0 then 1 else 0 end as pst_has_injury
+
+from tmp
+
+;
+
+--- 53.93 s
+
+
+
+-----State level peak injury month and ER on weekends
+
+DROP TABLE IF EXISTS dev_er_enc.state_er_usage_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.state_er_usage_${query_run}
+
+STORED AS ORC tblproperties('orc.compress' = 'SNAPPY')
+
+AS
+
+with t1 as (
+
+select
+
+run_date,
+
+st,
+
+count(med_case_start_dt) as tot_er_vol,
+
+count(if(avd_injury is not null, med_case_start_dt, null)) as tot_injury_vol,
+
+count(if(avd_injury is not null, med_case_start_dt, null))/count(med_case_start_dt) as st_injury_pct
+
+from dev_er_enc.mem_x_indiv_${query_run} a 
+
+left join dev_er_enc.er_model_med_case_x_clm_x_icd_${query_run} b
+
+on a.member_id = b.member_id
+
+where b.med_case_start_dt < a.run_date
+
+and round(months_between(a.run_date, b.med_case_start_dt)) <= 11
+
+and round(months_between(a.run_date, b.med_case_start_dt)) >= 9
+
+group by run_date, st
+
+),
+
+t2 as (
+
+select
+
+year(med_case_start_dt) as yr,
+
+month(med_case_start_dt) as mth,
+
+*
+
+from dev_er_enc.er_model_med_case_x_clm_x_icd_${query_run}
+
+),
+
+t3 as (
+
+select
+
+yr,
+
+mth,
+
+st,
+
+count(med_case_start_dt) as tot_er_vol,
+
+count(if(avd_injury is not null, med_case_start_dt, null)) as tot_injury_vol
+
+from t2
+
+group by yr, mth, st
+
+),
+
+t4 as (
+
+select
+
+yr,
+
+st,
+
+max(tot_er_vol) as max_tot_er_vol,
+
+max(tot_injury_vol) as max_tot_injury_vol
+
+from t3
+
+group by yr, st
+
+),
+
+t5_a as (
+
+select distinct
+
+t3.yr,
+
+t3.st,
+
+t3.mth as peak_mo_er
+
+from t3
+
+left join t4
+
+on t3.yr = t4.yr
+
+and t3.st = t4.st
+
+where t3.tot_er_vol = t4.max_tot_er_vol
+
+),
+
+t5_b as (
+
+select distinct
+
+t3.yr,
+
+t3.st,
+
+t3.mth as peak_mo_injury
+
+from t3
+
+left join t4
+
+on t3.yr = t4.yr
+
+and t3.st = t4.st
+
+where t3.tot_injury_vol = t4.max_tot_injury_vol 
+
+),
+
+t6 as (
+
+select 
+
+a.individual_id,
+
+a.run_date,
+
+trim(us.state_postal_cd) as st,
+
+case when peak_mo_er in (month(add_months(a.run_date, 1)), month(add_months(a.run_date, 2)), month(add_months(a.run_date, 3))) then 1 else 0 end as er_peak,
+
+case when peak_mo_injury in (month(add_months(a.run_date, 1)), month(add_months(a.run_date, 2)), month(add_months(a.run_date, 3))) then 1 else 0 end as injury_peak
+
+from dev_er_enc.mem_x_indiv_${query_run} a 
+
+left join edw_enc.edw_unmask_member b
+
+on a.member_id = b.member_id
+
+left join dev_phm_enc.zip_census_usps_urbrur us
+
+on cast(b.zip_cd as int) = cast(us.zip_cd as int)
+
+left join t5_a
+
+on t5_a.yr = year(a.run_date)
+
+and t5_a.st = trim(us.state_postal_cd)
+
+left join t5_b
+
+on t5_b.yr = year(a.run_date)
+
+and t5_b.st = trim(us.state_postal_cd)
+
+)
+
+select
+
+t6.individual_id,
+
+t6.run_date,
+
+t6.st,
+
+er_peak,
+
+injury_peak,
+
+st_injury_pct
+
+from t6
+
+left join t1
+
+on t6.run_date = t1.run_date
+
+and t6.st = t1.st
+
+;
+
+
+
+
+
+
+
+----ADD previous clm cnt
+
+SET hive.merge.tezfiles=false;
+
+SET hivevar:observation_period=13;
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_cohort_prior_mo_clm_base_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_cohort_prior_mo_clm_base_${query_run}
+
+STORED AS ORC tblproperties('orc.compress' = 'SNAPPY')
+
+AS
+
+SELECT a.individual_id
+
+,a.member_id
+
+,a.run_date
+
+,clm.srv_start_dt
+
+,clm.received_dt
+
+,clm.allowed_amt
+
+,clm.srv_spclty_ctg_cd
+
+,clm.plc_srv_ctg_cd
+
+,clm.duplicate_ind
+
+,clm.plc_srv_cd
+
+,clm.srv_prvdr_nsa_id
+
+,clm.hcfa_plc_srv_cd
+
+,clm.prcdr_cd
+
+,clm.srv_prvdr_id
+
+,p.prcdr_group_nbr
+
+,sc.spclty_ctg_cls_cd
+
+,pv.provider_type_cd
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN edw_enc.edw_med_case_x_clm_ln c
+
+ON a.member_id=c.member_id
+
+LEFT JOIN edw_enc.edw_claim_line clm
+
+ON c.claim_line_id=clm.claim_line_id
+
+LEFT JOIN edw_enc.edw_procedure p 
+
+ON clm.prcdr_cd = p.prcdr_cd
+
+LEFT JOIN edw_enc.edw_specialty_category sc 
+
+ON clm.srv_spclty_ctg_cd = sc.specialty_ctg_cd
+
+LEFT JOIN edw_enc.edw_provider_dm pv 
+
+ON pv.provider_id = clm.srv_prvdr_id
+
+WHERE TRIM(clm.summarized_srv_ind) = 'Y'
+
+AND trim(clm.duplicate_ind) = 'N'
+
+AND round(months_between(a.run_date, clm.srv_start_dt)) BETWEEN 0 AND ${observation_period}  
+
+AND datediff(clm.received_dt, a.run_date)<0
+
+;
+
+--- 875.82 s
+
+
+
+SET hivevar:month_window=12;
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_cohort_prior_${month_window}_mo_clms_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_cohort_prior_${month_window}_mo_clms_${query_run}
+
+STORED AS ORC tblproperties('orc.compress' = 'SNAPPY')
+
+AS
+
+SELECT 
+
+individual_id, 
+
+run_date,
+
+COUNT(1) AS clm_ln_counts,
+
+NVL(SUM(allowed_amt),0) AS allowed_amt_all_clms,
+
+COUNT(DISTINCT if(prcdr_group_nbr = 161 AND TRIM(srv_spclty_ctg_cd) IN ('FP', 'I', 'P')
+
+                  AND TRIM(plc_srv_ctg_cd) = 'O', srv_start_dt, NULL)) AS pry${month_window}m_pcp_visits,
+
+SUM(DISTINCT if(prcdr_group_nbr = 161 AND TRIM(srv_spclty_ctg_cd) IN ('FP', 'I', 'P')
+
+                  AND TRIM(plc_srv_ctg_cd) = 'O', allowed_amt, 0)) AS pry${month_window}m_allowed_amt_pcp,                 
+
+COUNT(DISTINCT if(prcdr_group_nbr = 161 AND TRIM(spclty_ctg_cls_cd) IN ('M','S','O')
+
+                  AND TRIM(srv_spclty_ctg_cd) NOT IN ('FP', 'I', 'P')
+
+                  AND TRIM(plc_srv_ctg_cd) = 'O', srv_start_dt, NULL)) AS pry${month_window}m_spec_visits,
+
+SUM(DISTINCT if(prcdr_group_nbr = 161 AND TRIM(spclty_ctg_cls_cd) IN ('M','S','O')
+
+                  AND TRIM(srv_spclty_ctg_cd) NOT IN ('FP', 'I', 'P')
+
+                  AND TRIM(plc_srv_ctg_cd) = 'O', allowed_amt, 0)) AS pry${month_window}m_allowed_amt_spec,     
+
+COUNT(DISTINCT if(TRIM(duplicate_ind)= 'N' AND TRIM(plc_srv_cd) <> 'E'
+
+                  AND TRIM(srv_prvdr_nsa_id) NOT BETWEEN '03651' AND '03656'
+
+                  AND TRIM(srv_prvdr_nsa_id) NOT BETWEEN '03661' AND '03666'
+
+                  AND (TRIM(hcfa_plc_srv_cd)  = '20' or TRIM(provider_type_cd) IN ('UC','UM') or TRIM(prcdr_cd) = 'S9083'),
+
+                  srv_start_dt, NULL)) AS pry${month_window}m_urg_visits,
+
+SUM(DISTINCT if(TRIM(duplicate_ind)= 'N' AND TRIM(plc_srv_cd) <> 'E'
+
+                  AND TRIM(srv_prvdr_nsa_id) NOT BETWEEN '03651' AND '03656'
+
+                  AND TRIM(srv_prvdr_nsa_id) NOT BETWEEN '03661' AND '03666'
+
+                  AND (TRIM(hcfa_plc_srv_cd)  = '20' or TRIM(provider_type_cd) IN ('UC','UM') or TRIM(prcdr_cd) = 'S9083'),
+
+                  allowed_amt, 0)) AS pry${month_window}m_allowed_amt_urg  
+
+FROM dev_er_enc.er_model_cohort_prior_mo_clm_base_${query_run}
+
+WHERE run_date > srv_start_dt
+
+AND round(months_between(run_date, srv_start_dt)) <=${month_window}
+
+GROUP BY individual_id, run_date
+
+;
+
+--- 467.59 s
+
+
+
+SET hivevar:month_window=6;
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_cohort_prior_${month_window}_mo_clms_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_cohort_prior_${month_window}_mo_clms_${query_run}
+
+STORED AS ORC tblproperties('orc.compress' = 'SNAPPY')
+
+AS
+
+SELECT individual_id, run_date,
+
+COUNT(1) AS clm_ln_counts,
+
+NVL(SUM(allowed_amt),0) AS allowed_amt_all_clms,
+
+COUNT(DISTINCT if(prcdr_GROUP_nbr = 161 AND TRIM(srv_spclty_ctg_cd) IN ('FP', 'I', 'P') 
+
+AND TRIM(plc_srv_ctg_cd) = 'O', srv_start_dt, NULL)) AS pry${month_window}m_pcp_visits,
+
+SUM(DISTINCT if(prcdr_GROUP_nbr = 161 AND TRIM(srv_spclty_ctg_cd) IN ('FP', 'I', 'P')
+
+ AND TRIM(plc_srv_ctg_cd) = 'O', allowed_amt, 0)) AS pry${month_window}m_allowed_amt_pcp,                 
+
+COUNT(DISTINCT if(prcdr_GROUP_nbr = 161 AND TRIM(spclty_ctg_cls_cd) IN ('M','S','O')
+
+ AND TRIM(srv_spclty_ctg_cd) NOT IN ('FP', 'I', 'P')
+
+ AND TRIM(plc_srv_ctg_cd) = 'O', srv_start_dt, NULL)) AS pry${month_window}m_spec_visits,
+
+SUM(DISTINCT if(prcdr_GROUP_nbr = 161 AND TRIM(spclty_ctg_cls_cd) IN ('M','S','O')
+
+ AND TRIM(srv_spclty_ctg_cd) NOT IN ('FP', 'I', 'P')
+
+ AND TRIM(plc_srv_ctg_cd) = 'O', allowed_amt, 0)) AS pry${month_window}m_allowed_amt_spec,     
+
+COUNT(DISTINCT if(TRIM(duplicate_ind)= 'N' AND TRIM(plc_srv_cd) <> 'E'
+
+ AND TRIM(srv_prvdr_nsa_id) NOT BETWEEN '03651' AND '03656'
+
+ AND TRIM(srv_prvdr_nsa_id) NOT BETWEEN '03661' AND '03666'
+
+ AND (TRIM(hcfa_plc_srv_cd)  = '20' or TRIM(provider_type_cd) IN ('UC','UM') or TRIM(prcdr_cd) = 'S9083'),
+
+ srv_start_dt, NULL)) AS pry${month_window}m_urg_visits,
+
+SUM(DISTINCT if(TRIM(duplicate_ind)= 'N' AND TRIM(plc_srv_cd) <> 'E'
+
+ AND TRIM(srv_prvdr_nsa_id) NOT BETWEEN '03651' AND '03656'
+
+ AND TRIM(srv_prvdr_nsa_id) NOT BETWEEN '03661' AND '03666'
+
+ AND (TRIM(hcfa_plc_srv_cd)  = '20' or TRIM(provider_type_cd) IN ('UC','UM') or TRIM(prcdr_cd) = 'S9083'),
+
+  allowed_amt, 0)) AS pry${month_window}m_allowed_amt_urg  
+
+FROM dev_er_enc.er_model_cohort_prior_mo_clm_base_${query_run}
+
+WHERE run_date > srv_start_dt
+
+AND round(months_between(run_date, srv_start_dt)) <=${month_window}
+
+GROUP BY individual_id, run_date
+
+;
+
+---387.18 s
+
+
+
+
+
+----clm interval
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_clm_interval_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_clm_interval_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY') AS
+
+with 
+
+tmp1 as (
+
+select distinct
+
+individual_id,
+
+run_date,
+
+srv_start_dt,
+
+if((prcdr_group_nbr = 161 AND TRIM(srv_spclty_ctg_cd) IN ('FP', 'I', 'P')
+
+ AND TRIM(plc_srv_ctg_cd) = 'O') or (prcdr_GROUP_nbr = 161 AND TRIM(spclty_ctg_cls_cd) IN ('M','S','O')
+
+ AND TRIM(srv_spclty_ctg_cd) NOT IN ('FP', 'I', 'P')
+
+ AND TRIM(plc_srv_ctg_cd) = 'O') or (TRIM(duplicate_ind)= 'N' AND TRIM(plc_srv_cd) <> 'E'
+
+ AND TRIM(srv_prvdr_nsa_id) NOT BETWEEN '03651' AND '03656'
+
+ AND TRIM(srv_prvdr_nsa_id) NOT BETWEEN '03661' AND '03666'
+
+ AND (TRIM(hcfa_plc_srv_cd)  = '20' or TRIM(provider_type_cd) IN ('UC','UM') or TRIM(prcdr_cd) = 'S9083')), 1, 0) as med_visit
+
+from dev_er_enc.er_model_cohort_prior_mo_clm_base_${query_run}
+
+where run_date > srv_start_dt
+
+and datediff(received_dt, run_date)<0
+
+and round(months_between(run_date, srv_start_dt)) BETWEEN 0 AND 12
+
+),
+
+tmp2 as (
+
+select
+
+*,
+
+lag(srv_start_dt) over (partition by individual_id, run_date order by srv_start_dt) as last_visit_dt
+
+from tmp1
+
+),
+
+tmp3 as (
+
+select
+
+*,
+
+datediff(srv_start_dt, last_visit_dt) as visit_days
+
+from tmp2
+
+where last_visit_dt is not null
+
+)
+
+select
+
+individual_id,
+
+run_date,
+
+nvl(count(distinct srv_start_dt),0) as visit_cnt,
+
+nvl(avg(visit_days),0) as avg_days,
+
+nvl(stddev_pop(visit_days),0) as sd_days
+
+from tmp3
+
+group by individual_id, run_date
+
+;
+
+--- 362.95 s
+
+
+
+
+
+----ER interval
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_er_cases_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_er_cases_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY')
+
+AS
+
+SELECT DISTINCT 
+
+b.med_case_start_dt,
+
+a.individual_id,
+
+a.run_date,
+
+lag(b.med_case_start_dt) over (partition by a.individual_id, a.run_date order by b.med_case_start_dt) as last_visit
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN dev_er_enc.er_model_med_case_x_clm_x_icd_${query_run} b
+
+ON a.member_id=b.member_id
+
+WHERE a.run_date > b.med_case_start_dt
+
+AND round(months_between(a.run_date, b.med_case_start_dt)) BETWEEN 0 AND 12  
+
+AND datediff(b.received_dt, a.run_date)<0; 
+
+---47.03 s
+
+
+
+
+
+----Unnecessary ER
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_avd_er_cases_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_avd_er_cases_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY') AS
+
+with tmp as 
+
+(SELECT DISTINCT
+
+a.individual_id,
+
+a.run_date,
+
+b.med_case_start_dt,
+
+if(trim(b.er_type) = 'UNNECESSARY', 1, 0) as unnecessary_er
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN dev_er_enc.er_model_med_case_x_clm_x_icd_${query_run} b
+
+ON a.member_id=b.member_id
+
+WHERE b.is_unnecessary='Y'
+
+AND a.run_date > b.med_case_start_dt
+
+AND round(months_between(a.run_date, b.med_case_start_dt)) BETWEEN 0 AND 12 
+
+AND datediff(b.received_dt, a.run_date)<0
+
+AND YEAR(b.med_case_start_dt) BETWEEN 2015 AND 2018
+
+),
+
+tmp1 as (
+
+SELECT
+
+*,
+
+lag(med_case_start_dt) over (partition by individual_id, run_date order by med_case_start_dt) as last_avd_visit
+
+FROM tmp
+
+),
+
+tmp2 as (
+
+SELECT
+
+*,
+
+datediff(med_case_start_dt, last_avd_visit) as avd_days
+
+FROM tmp1
+
+WHERE last_avd_visit is not null
+
+)
+
+SELECT
+
+individual_id, run_date,
+
+count(DISTINCT med_case_start_dt) as avd_er_cnt,
+
+avg(avd_days) as avg_avd_days,
+
+stddev_pop(avd_days) as sd_avd_days
+
+FROM tmp2
+
+GROUP BY individual_id, run_date
+
+;
+
+---47.83 
+
+
+
+----Preventable ER
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_pvt_er_cases_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_pvt_er_cases_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY') AS
+
+with tmp as 
+
+(SELECT DISTINCT
+
+a.individual_id,
+
+a.run_date,
+
+b.med_case_start_dt,
+
+if(trim(b.er_type)='PREVENTABLE', 1, 0) as preventable_er
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+LEFT JOIN dev_er_enc.er_model_med_case_x_clm_x_icd_${query_run} b
+
+ON a.member_id=b.member_id
+
+WHERE b.is_preventable='Y'
+
+AND a.run_date > b.med_case_start_dt
+
+AND round(months_between(a.run_date, b.med_case_start_dt)) BETWEEN 0 AND 12 
+
+AND datediff(b.received_dt, a.run_date)<0
+
+AND YEAR(b.med_case_start_dt) BETWEEN 2015 AND 2018
+
+),
+
+tmp1 as (
+
+SELECT
+
+*,
+
+lag(med_case_start_dt) over (partition by individual_id, run_date order by med_case_start_dt) as last_pvt_visit
+
+FROM tmp
+
+),
+
+tmp2 as (
+
+SELECT
+
+*,
+
+datediff(med_case_start_dt, last_pvt_visit) as pvt_days
+
+FROM tmp1
+
+WHERE last_pvt_visit is not null
+
+)
+
+SELECT
+
+individual_id, 
+
+run_date,
+
+count(DISTINCT med_case_start_dt) as pvt_er_cnt,
+
+avg(pvt_days) as avg_pvt_days,
+
+stddev_pop(pvt_days) as sd_pvt_days
+
+FROM tmp2
+
+GROUP BY individual_id, run_date
+
+;
+
+---41.67 s
+
+
+
+
+
+
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_avd_er_days_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_avd_er_days_${query_run}
+
+AS
+
+with aller as 
+
+(SELECT
+
+individual_id, 
+
+run_date,
+
+count(DISTINCT med_case_start_dt) as er_cnt
+
+FROM dev_er_enc.er_model_er_cases_${query_run} a
+
+GROUP BY individual_id, run_date),
+
+avder as
+
+(SELECT DISTINCT 
+
+avd.individual_id, 
+
+avd.run_date,
+
+avd.avd_er_cnt,
+
+avd.avg_avd_days as avg_avd_days,
+
+avd.sd_avd_days as sd_avd_days
+
+FROM dev_er_enc.er_model_avd_er_cases_${query_run} avd)
+
+SELECT DISTINCT 
+
+a.individual_id, 
+
+a.run_date,
+
+a.er_cnt,
+
+b.sd_avd_days,
+
+b.avg_avd_days,
+
+(365/b.avd_er_cnt)/b.avg_avd_days as base_avd_days,
+
+(b.avd_er_cnt/a.er_cnt)*100 as avd_er_pct
+
+FROM aller a
+
+LEFT JOIN avder b
+
+ON a.individual_id=b.individual_id
+
+AND a.run_date=b.run_date
+
+;
+
+--- 69.31 s
+
+
+
+
+
+
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_pvt_er_days_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_pvt_er_days_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY')
+
+AS
+
+with aller as 
+
+(SELECT
+
+individual_id, 
+
+run_date,
+
+count(DISTINCT med_case_start_dt) as er_cnt
+
+FROM dev_er_enc.er_model_er_cases_${query_run} a
+
+GROUP BY individual_id, run_date),
+
+pvter as
+
+(SELECT DISTINCT 
+
+individual_id, 
+
+run_date,
+
+pvt_er_cnt,
+
+avg_pvt_days as avg_pvt_days,
+
+sd_pvt_days as sd_pvt_days
+
+FROM dev_er_enc.er_model_pvt_er_cases_${query_run})
+
+SELECT DISTINCT 
+
+a.individual_id, 
+
+a.run_date,
+
+b.avg_pvt_days,
+
+b.sd_pvt_days,
+
+(365/b.pvt_er_cnt)/b.avg_pvt_days as base_pvt_days,
+
+(b.pvt_er_cnt/a.er_cnt)*100 as pvt_er_pct
+
+FROM aller a
+
+LEFT JOIN pvter b
+
+ON a.individual_id=b.individual_id
+
+AND a.run_date=b.run_date
+
+;
+
+---36.06 s
+
+
+
+------Run distance calculation
+
+------Two sql scripts and one python script
+
+
+
+-----add distance 
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_cohort_dist_training_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_cohort_dist_training_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY')
+
+AS 
+
+SELECT 
+
+a.individual_id,
+
+a.run_date,
+
+min(b.nn_er_miles) AS nn_er_miles, 
+
+min(b.nn_uc_miles) AS nn_uc_miles,  
+
+min(NVL((b.nn_er_miles-b.nn_uc_miles), NULL)) as diff_dist
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+INNER JOIN dev_er_enc.member_distance_${query_run} b
+
+ON a.individual_id = b.individual_id
+
+GROUP BY a.individual_id, a.run_date
+
+;
+
+--- 305.93 s
+
+
+
+
+
+SET hive.merge.tezfiles=true;
+
+SET hivevar:month_window=6;
+
+-----VERY BIG JOIN
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_data_training_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_data_training_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY')
+
+AS
+
+with tmp as (
+
+select
+
+individual_id,
+
+run_date,
+
+max(business_ln_cd) as business_ln_cd,
+
+max(fund_ctg_cd) as fund_ctg_cd,
+
+max(mbr_rtp_type_cd) as mbr_rtp_type_cd,
+
+max(age_nbr) as age_nbr,
+
+max(gender_cd) as gender_cd,
+
+max(local_mkt_cd) as local_mkt_cd,
+
+max(model_record_type) as model_record_type
+
+from dev_er_enc.mem_x_indiv_${query_run}
+
+group by individual_id, run_date
+
+),
+
+tmp2 as (
+
+SELECT 
+
+a.individual_id, 
+
+a.run_date,
+
+COUNT(DISTINCT mm.eff_dt) AS mo_cnt
+
+FROM dev_er_enc.mem_x_indiv_${query_run} a
+
+left JOIN edw_enc.edw_prspctv_ems_mbrshp mm
+
+ON a.member_id=mm.member_id
+
+LEFT JOIN edw_enc.edw_product_line pl
+
+ON TRIM(mm.product_ln_cd) = TRIM(pl.product_ln_cd)
+
+WHERE months_BETWEEN(a.run_date, mm.eff_dt) BETWEEN 0 AND ${month_window}
+
+AND TRIM(pl.product_type_cd) = 'M' 
+
+AND TRIM(a.business_ln_cd) IN ('CP', 'ME')
+
+GROUP BY a.individual_id, a.run_date
+
+)
+
+SELECT distinct
+
+a.individual_id,
+
+a.run_date,
+
+a.business_ln_cd,
+
+a.fund_ctg_cd,
+
+a.mbr_rtp_type_cd,
+
+a.age_nbr,
+
+a.gender_cd,
+
+a.local_mkt_cd,
+
+a.model_record_type,
+
+case when b.mnths_since_er is null then 'no ER visit'
+
+when b.mnths_since_er <=1 then 'within 1 mo'
+
+when b.mnths_since_er >1 and b.mnths_since_er<=3 then '1-3 mo'
+
+when b.mnths_since_er >3 and b.mnths_since_er<=6 then '3-6 mo'
+
+when b.mnths_since_er >6 and b.mnths_since_er<=9 then '6-9 mo'
+
+when b.mnths_since_er >9 and b.mnths_since_er<=12 then '9-12 mo'
+
+when b.mnths_since_er>12 then 'more than 12mo' end as mnths_since_er,
+
+case when b.mnths_since_avd_er is null then 'no avd ER visit'
+
+when b.mnths_since_avd_er <=1 then 'within 1 mo'
+
+when b.mnths_since_avd_er >1 and b.mnths_since_avd_er<=3 then '1-3 mo'
+
+when b.mnths_since_avd_er >3 and b.mnths_since_avd_er<=6 then '3-6 mo'
+
+when b.mnths_since_avd_er >6 and b.mnths_since_avd_er<=9 then '6-9 mo'
+
+when b.mnths_since_avd_er >9 and b.mnths_since_avd_er<=12 then '9-12 mo'
+
+when b.mnths_since_avd_er>12 then 'more than 12mo' end as mnths_since_avd_er,
+
+case when b.days_since_er is null then 'No ER visit'
+
+when b.days_since_er <= 7 then 'within 1 wk'
+
+when b.days_since_er >7 and b.days_since_er<=14 then 'within 2 wk'
+
+when b.days_since_er >14 and b.days_since_er <=28 then 'within 4 wk'
+
+when b.days_since_er >28 then 'more than 4 wk' end as days_since_er,
+
+case when b.days_since_avd_er is null then 'No avd ER visit'
+
+when b.days_since_avd_er <= 7 then 'within 1 wk'
+
+when b.days_since_avd_er >7 and b.days_since_avd_er<=14 then 'within 2 wk'
+
+when b.days_since_avd_er >14 and b.days_since_avd_er <=28 then 'within 4 wk'
+
+when b.days_since_avd_er >28 then 'more than 4 wk' end as days_since_avd_er,
+
+case when b.days_since_injury_er is null then 'No avd ER visit'
+
+when b.days_since_injury_er <= 7 then 'within 1 wk'
+
+when b.days_since_injury_er >7 and b.days_since_injury_er<=14 then 'within 2 wk'
+
+when b.days_since_injury_er >14 and b.days_since_injury_er <=28 then 'within 4 wk'
+
+when b.days_since_injury_er >28 then 'more than 4 wk' end as days_since_injury_er,
+
+nvl(b.weekend_er/b.pry_6m_er, 0) as weekend_er_pct,
+
+nvl(b.weekend_injury_er/b.weekend_er, 0) as weekend_injury_er_pct,
+
+rsk.prspctv_rsk_nbr,
+
+tmp2.mo_cnt,
+
+mon.mnth_cnt_2yr,
+
+mon.has_pcp,
+
+nvl(hh.pcp_hhi_1yr, 0) as pcp_hhi_1yr,
+
+---a.ntwk_srv_area_id,
+
+nvl(hpd.MOH, 0) as MOH, 
+
+nvl(hpd.DIA, 0) as DIA, 
+
+nvl(hpd.LBP, 0) as LBP, 
+
+nvl(hpd.AST, 0) as AST, 
+
+nvl(hpd.COP, 0) as COP, 
+
+nvl(hpd.CHD, 0) as CHD, 
+
+nvl(hpd.AFF, 0) as AFF,
+
+nvl(hpd.ALC, 0) as ALC, 
+
+nvl(hpd.ANX, 0) as ANX,
+
+nvl(hpd.BIP, 0) as BIP,
+
+nvl(hpd.CRF, 0) as CRF,
+
+nvl(hpd.DEM, 0) as DEM,
+
+nvl(hpd.DEP, 0) as DEP,
+
+nvl(hpd.EPL, 0) as EPL,
+
+nvl(hpd.HYP, 0) as HYP,
+
+nvl(hpd.IHD, 0) as IHD,
+
+nvl(hpd.IBP, 0) as IBP,
+
+nvl(hpd.OBE, 0) as OBE,
+
+nvl(hpd.PAR, 0) as PAR,
+
+nvl(hpd.SDO, 0) as SDO,
+
+nvl(hpd.NGD, 0) as NGD,
+
+plan.hmo,
+
+plan.ppo,
+
+plan.plan_sponsor,
+
+nvl(b.pry_6m_avd_er, 0) as pry_6m_avd_er,
+
+nvl(b.pry_6m_allowed_amt_avoid, 0) as pry_6m_allowed_amt_avoid,
+
+nvl(b.pry_6m_pvt_er, 0) as pry_6m_pvt_er,
+
+nvl(b.pry_6m_allowed_amt_prevent, 0) as pry_6m_allowed_amt_prevent,
+
+nvl(b.pry_6m_er, 0) as pry_6m_er,
+
+nvl(b.pry_6m_allowed_amt_all_er, 0) as pry_6m_allowed_amt_all_er,
+
+nvl(b.pry_6m_injury_er, 0) as pry_6m_injury_er,
+
+nvl(b.pry_6m_allowed_amt_injury, 0) as pry_6m_allowed_amt_injury,
+
+nvl(fl.has_unnecessary_6mo, 0) as has_unnecessary_6mo,
+
+nvl(fl.has_preventable_6mo, 0) as has_preventable_6mo,
+
+nvl(fl.has_injury_6mo, 0) as has_injury_6mo,
+
+nvl(fl.has_unnecessary_12mo, 0) as has_unnecessary_12mo,
+
+nvl(fl.has_preventable_12mo, 0) as has_preventable_12mo,
+
+nvl(fl.has_injury_12mo, 0) as has_injury_12mo,
+
+nvl(fl.er_case_2yr_pm, 0) as er_case_2yr_pm,
+
+NVL(c.pst_3m_avd_er,0) AS pst_3m_avd_er,
+
+NVL(c.pst_3m_allowed_amt_avoid,0) AS pst_3m_allowed_amt_avoid,
+
+NVL(c.pst_3m_pvt_er,0) AS pst_3m_pvt_er,
+
+NVL(c.pst_3m_allowed_amt_prevent,0) AS pst_3m_allowed_amt_prevent,
+
+NVL(c.pst_3m_injury_er,0) AS pst_3m_injury_er,
+
+NVL(c.pst_3m_allowed_amt_injury,0) AS pst_3m_allowed_amt_injury,
+
+NVL(c.pst_3m_er,0) AS pst_3m_er,
+
+NVL(c.pst_3m_allowed_amt_all_er,0) AS pst_3m_allowed_amt_all_er,
+
+nvl(c.pst_has_avd, 0) as pst_has_avd,
+
+nvl(c.pst_has_pvt, 0) as pst_has_pvt,
+
+nvl(c.pst_has_injury, 0) as pst_has_injury,
+
+NVL(d.clm_ln_counts,0) AS pry6m_clm_ln_counts,
+
+NVL(d.pry6m_pcp_visits,0) AS pry6m_pcp_visits,
+
+NVL(d.pry6m_allowed_amt_pcp,0) AS pry6m_allowed_amt_pcp,
+
+NVL(d.pry6m_spec_visits,0) AS pry6m_spec_visits,
+
+NVL(d.pry6m_allowed_amt_spec,0) AS pry6m_allowed_amt_spec,
+
+NVL(d.pry6m_urg_visits,0) AS pry6m_urg_visits,
+
+NVL(d.pry6m_allowed_amt_urg,0) AS pry6m_allowed_amt_urg,
+
+NVL(e.clm_ln_counts,0) AS pry12m_clm_ln_counts,
+
+case when e.clm_ln_counts>0 then 1 else 0 end as has_claim_12mo,
+
+NVL(e.pry12m_pcp_visits,0) AS pry12m_pcp_visits,
+
+NVL(e.pry12m_allowed_amt_pcp,0) AS pry12m_allowed_amt_pcp,
+
+NVL(e.pry12m_spec_visits,0) AS pry12m_spec_visits,
+
+NVL(e.pry12m_allowed_amt_spec,0) AS pry12m_allowed_amt_spec,
+
+NVL(e.pry12m_urg_visits,0) AS pry12m_urg_visits,
+
+NVL(e.pry12m_allowed_amt_urg,0) AS pry12m_allowed_amt_urg,
+
+NVL(f.family_type,'unknown') AS family_type,
+
+NVL(f.infant_ind,'unknown') AS infant_ind,
+
+f.zip_cd,
+
+substring(f.zip_cd, 1, 2) as zip2,
+
+substring(f.zip_cd, 1, 4) as zip4,
+
+NVL(cast(f.medianhhincome as double),0)  AS ylm_median_income,
+
+g.nn_uc_miles,
+
+g.nn_er_miles,
+
+g.diff_dist,
+
+case when nn_uc_miles is null then 1 else 0 end as null_uc,
+
+case when nn_er_miles is null then 1 else 0 end as null_er,
+
+nvl(ci.visit_cnt, 0) as visit_cnt,
+
+case when ci.avg_days is null then 'No medical claim'
+
+when ci.avg_days <=7 then 'within 1 wk'
+
+when ci.avg_days >7 and ci.avg_days <=14 then 'within 2 wk'
+
+when ci.avg_days >14 and ci.avg_days <=30 then 'within 1 mo'
+
+when ci.avg_days >30 and ci.avg_days <=90 then 'within 3 mo'
+
+when ci.avg_days >90 and ci.avg_days <=180 then 'within 6 mo'
+
+when ci.avg_days >180 and ci.avg_days <=270 then 'within 9 mo'
+
+when ci.avg_days >270 and ci.avg_days <=365 then 'within 12 mo' end as avg_days,
+
+nvl(ci.sd_days, 0) as sd_days,
+
+case when h.avg_avd_days is null then 'No avd ER claim'
+
+when h.avg_avd_days <=7 then 'within 1 wk'
+
+when h.avg_avd_days >7 and h.avg_avd_days <=14 then 'within 2 wk'
+
+when h.avg_avd_days >14 and h.avg_avd_days <=30 then 'within 1 mo'
+
+when h.avg_avd_days >30 and h.avg_avd_days <=90 then 'within 3 mo'
+
+when h.avg_avd_days >90 and h.avg_avd_days <=180 then 'within 6 mo'
+
+when h.avg_avd_days >180 and h.avg_avd_days <=270 then 'within 9 mo'
+
+when h.avg_avd_days >270 and h.avg_avd_days <=365 then 'within 12 mo' end as avg_avd_days,
+
+nvl(h.sd_avd_days, 0) as sd_avd_days,
+
+case when h.base_avd_days is null then 'No avd ER claim'
+
+when h.base_avd_days <=7 then 'within 1 wk'
+
+when h.base_avd_days >7 and h.base_avd_days <=14 then 'within 2 wk'
+
+when h.base_avd_days >14 and h.base_avd_days <=30 then 'within 1 mo'
+
+when h.base_avd_days >30 and h.base_avd_days <=90 then 'within 3 mo'
+
+when h.base_avd_days >90 and h.base_avd_days <=180 then 'within 6 mo'
+
+when h.base_avd_days >180 and h.base_avd_days <=270 then 'within 9 mo'
+
+when h.base_avd_days >270 and h.base_avd_days <=365 then 'within 12 mo' end as base_avd_days,
+
+nvl(h.avd_er_pct, 0) as avd_er_pct,
+
+case when pt.avg_pvt_days is null then 'No pvt ER claim'
+
+when pt.avg_pvt_days <=7 then 'within 1 wk'
+
+when pt.avg_pvt_days >7 and pt.avg_pvt_days <=14 then 'within 2 wk'
+
+when pt.avg_pvt_days >14 and pt.avg_pvt_days <=30 then 'within 1 mo'
+
+when pt.avg_pvt_days >30 and pt.avg_pvt_days <=90 then 'within 3 mo'
+
+when pt.avg_pvt_days >90 and pt.avg_pvt_days <=180 then 'within 6 mo'
+
+when pt.avg_pvt_days >180 and pt.avg_pvt_days <=270 then 'within 9 mo'
+
+when pt.avg_pvt_days >270 and pt.avg_pvt_days <=365 then 'within 12 mo' end as avg_pvt_days,
+
+nvl(pt.sd_pvt_days, 0) as sd_pvt_days,
+
+case when pt.base_pvt_days is null then 'No avd ER claim'
+
+when pt.base_pvt_days <=7 then 'within 1 wk'
+
+when pt.base_pvt_days >7 and pt.base_pvt_days <=14 then 'within 2 wk'
+
+when pt.base_pvt_days >14 and pt.base_pvt_days <=30 then 'within 1 mo'
+
+when pt.base_pvt_days >30 and pt.base_pvt_days <=90 then 'within 3 mo'
+
+when pt.base_pvt_days >90 and pt.base_pvt_days <=180 then 'within 6 mo'
+
+when pt.base_pvt_days >180 and pt.base_pvt_days <=270 then 'within 9 mo'
+
+when pt.base_pvt_days >270 and pt.base_pvt_days <=365 then 'within 12 mo' end as base_pvt_days,
+
+nvl(pt.pvt_er_pct, 0) as pvt_er_pct,
+
+nvl(pri.lab_cnt_12mo, 0) as lab_cnt_12mo,
+
+nvl(pri.dx49_12mo, 0) as dx49_12mo,
+
+nvl(pri.dx150_12mo, 0) as dx150_12mo,
+
+nvl(pri.dxc1090_12mo, 0) as dxc1090_12mo,
+
+nvl(pri.rev307_12mo, 0) as rev307_12mo,
+
+nvl(pri.prc239_12mo_cnt, 0) as prc239_12mo_cnt,
+
+nvl(pri.dx12_24mo, 0) as dx12_24mo,
+
+nvl(pri.dx43_24mo, 0) as dx43_24mo,
+
+nvl(pri.dx131_24mo, 0) as dx131_24mo,
+
+nvl(pri.dx144_24mo, 0) as dx144_24mo,
+
+nvl(pri.dx241_24mo, 0) as dx241_24mo,
+
+nvl(pri.dx247_24mo, 0) as dx247_24mo,
+
+nvl(pri.dx251_24mo, 0) as dx251_24mo,
+
+nvl(pri.prc139_24mo, 0) as prc139_24mo,
+
+nvl(pri.prc149_24mo, 0) as prc149_24mo,
+
+nvl(pri.prc151_24mo, 0) as prc151_24mo,
+
+nvl(pri.prc153_24mo, 0) as prc153_24mo,
+
+nvl(pri.prc213_24mo_cnt, 0) as prc213_24mo_cnt,
+
+nvl(pri.rev324_24mo, 0) as rev324_24mo,
+
+nvl(pri.dx20_6mo, 0) as dx20_6mo,
+
+nvl(pri.dx139_6mo, 0) as dx139_6mo,
+
+nvl(pri.prc133_6mo, 0) as prc133_6mo,
+
+nvl(pri.prc143_6mo, 0) as prc143_6mo,
+
+nvl(pri.rev370_6mo, 0) as rev370_6mo,
+
+nvl(pri.prc154_3mo, 0) as prc154_3mo,
+
+pl.pcp_12mo_avg,
+
+pl.pcp_1mo,
+
+nvl(gpi.gpi2_57_2yr, 0) as gpi2_57_2yr,
+
+nvl(gpi.gpi4_1600_2yr, 0) as gpi4_1600_2yr,
+
+nvl(gpi.gpi4_1710_2yr, 0) as gpi4_1710_2yr,
+
+nvl(gpi.gpi4_3720_1yr, 0) as gpi4_3720_1yr,
+
+nvl(gpi.gpi2_72_6mo, 0) as gpi2_72_6mo,
+
+nvl(gpi.gpi4_3320_6mo, 0) as gpi4_3320_6mo,
+
+nvl(gpi.gpi2_65_3mo, 0) as gpi2_65_3mo,
+
+pgt.pgt811_2pyr,
+
+pgt.pgt59_6mo,
+
+dis.avg_dist,
+
+f.urbsubr,
+
+eru.er_peak,
+
+eru.injury_peak,
+
+eru.st_injury_pct
+
+FROM tmp a
+
+left join tmp2 
+
+on a.individual_id = tmp2.individual_id
+
+and a.run_date = tmp2.run_date
+
+left join dev_er_enc.er_model_cohort_prior_6_mo_er_visits_${query_run} b
+
+on a.individual_id = b.individual_id
+
+and a.run_date = b.run_date
+
+LEFT JOIN dev_er_enc.er_model_cohort_post_3_mo_er_visits_${query_run} c
+
+ON a.individual_id=c.individual_id
+
+AND a.run_date=c.run_date
+
+LEFT JOIN dev_er_enc.er_model_cohort_prior_6_mo_clms_${query_run} d
+
+ON a.individual_id=d.individual_id
+
+AND a.run_date=d.run_date
+
+LEFT JOIN dev_er_enc.er_model_cohort_prior_12_mo_clms_${query_run} e
+
+ON a.individual_id=e.individual_id
+
+AND a.run_date=e.run_date
+
+left join dev_er_enc.er_model_cohort_prior_flag_${query_run} fl
+
+on a.individual_id = fl.individual_id
+
+and a.run_date = fl.run_date
+
+left join dev_er_enc.mem_mon_clms_visits_${query_run} mon 
+
+on a.individual_id = mon.individual_id
+
+and a.run_date = mon.run_date
+
+LEFT JOIN dev_er_enc.er_model_cohort_demo_training_${query_run} f
+
+ON a.individual_id=f.individual_id
+
+AND a.run_date=f.run_date
+
+LEFT JOIN dev_er_enc.er_model_cohort_dist_training_${query_run} g
+
+ON a.individual_id=g.individual_id
+
+AND a.run_date=g.run_date
+
+left join dev_er_enc.er_model_clm_interval_${query_run} ci
+
+on a.individual_id = ci.individual_id
+
+and a.run_date = ci.run_date
+
+LEFT JOIN dev_er_enc.er_model_avd_er_days_${query_run} h
+
+ON a.individual_id=h.individual_id
+
+AND a.run_date=h.run_date
+
+left join dev_er_enc.er_model_pvt_er_days_${query_run} pt
+
+on a.individual_id = pt.individual_id
+
+and a.run_date = pt.run_date
+
+left join dev_er_enc.mem_prmo_stat_${query_run} pri
+
+on a.individual_id = pri.individual_id
+
+and a.run_date = pri.run_date
+
+left join dev_er_enc.mem_pr12mo_opp_${query_run} opp
+
+on a.individual_id = opp.individual_id
+
+and a.run_date = opp.run_date
+
+left join dev_er_enc.pcp_load_${query_run} pl
+
+on trim(f.zip_cd) = trim(pl.zip_cd)
+
+and a.run_date = pl.run_date
+
+left join dev_er_enc.gpi4_pri_${query_run} gpi
+
+on a.individual_id = gpi.individual_id
+
+and a.run_date = gpi.run_date
+
+left join dev_er_enc.pgt_first_${query_run} pgt
+
+on a.individual_id = pgt.individual_id
+
+and a.run_date = pgt.run_date
+
+left join dev_er_enc.mem_util_distance_${query_run} dis
+
+on a.individual_id = dis.individual_id
+
+left join dev_er_enc.er_model_prosp_risk_${query_run} rsk
+
+on a.individual_id = rsk.individual_id
+
+left join dev_er_enc.er_pcp_hhi_1yr_${query_run} hh
+
+on a.individual_id = hh.individual_id
+
+and a.run_date = hh.run_date
+
+left join dev_er_enc.mem_hpd_${query_run} hpd
+
+on a.individual_id = hpd.individual_id
+
+and a.run_date = hpd.run_date
+
+left join dev_er_enc.mem_plan_${query_run} plan
+
+on a.individual_id = plan.individual_id
+
+and a.run_date = plan.run_date
+
+left join dev_er_enc.state_er_usage_${query_run} eru
+
+on a.individual_id = eru.individual_id
+
+and a.run_date = eru.run_date
+
+where mo_cnt>=6
+
+;
+
+
+
+
+
+
+
+-----add random sample indicator for has_unnecessary_12mo=0 and has_preventable_12mo=0
+
+DROP TABLE IF EXISTS dev_er_enc.training_rand_aer_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.training_rand_aer_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY')
+
+AS
+
+select
+
+individual_id,
+
+run_date,
+
+row_number() over (order by rand()) as rk_aer
+
+from dev_er_enc.er_model_data_training_${query_run}
+
+where has_unnecessary_12mo = 0
+
+and trim(model_record_type) IN ('TRAIN')
+
+;
+
+---673.49 s
+
+
+
+DROP TABLE IF EXISTS dev_er_enc.training_rand_per_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.training_rand_per_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY')
+
+AS
+
+select
+
+individual_id,
+
+run_date,
+
+row_number() over (order by rand()) as rk_per
+
+from dev_er_enc.er_model_data_training_${query_run}
+
+where has_preventable_12mo = 0
+
+and trim(model_record_type) IN ('TRAIN')
+
+;
+
+---374.73 s
+
+
+
+
+
+
+
+-----Final
+
+DROP TABLE IF EXISTS dev_er_enc.er_model_data_training_final_${query_run};
+
+CREATE TABLE IF NOT EXISTS dev_er_enc.er_model_data_training_final_${query_run}
+
+STORED AS ORC tblproperties ('orc.compress' = 'SNAPPY')
+
+AS
+
+select
+
+a.*,
+
+b.rk_aer,
+
+c.rk_per
+
+from dev_er_enc.er_model_data_training_${query_run} a
+
+left join dev_er_enc.training_rand_aer_${query_run} b
+
+on a.individual_id = b.individual_id
+
+and a.run_date = b.run_date
+
+left join dev_er_enc.training_rand_per_${query_run} c
+
+on a.individual_id = c.individual_id
+
+and a.run_date = c.run_date
+
+;
+
+--- 178.84 s
+

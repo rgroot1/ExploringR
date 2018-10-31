@@ -58,3 +58,18 @@ dt[, mean(dt),by='treatment']
 
 url <- "http://steviep42.bitbucket.org/YOUTUBE.DIR/chi_crimes.csv"
 download.file(url,"chi_crimes.csv")
+
+# Define a simple function
+myFirstFun<-function(n)
+{
+  # Compute the square of integer `n`
+  n*n   
+}
+
+# Assign `10` to `k`
+k <- 10
+
+# Call `myFirstFun` with that value
+m <- myFirstFun(k)
+
+# Call `m` 

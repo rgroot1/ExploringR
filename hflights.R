@@ -1,4 +1,4 @@
-install.packages('hflights')
+#install.packages('hflights')
 library(hflights)
 library(dplyr)
 library(data.table)
@@ -28,9 +28,10 @@ filter(select(flights, UniqueCarrier, DepDelay), DepDelay > 60)
 flights %>% select(UniqueCarrier, DepDelay) %>% arrange(DepDelay)
 
 # we want to see the top 10 flights for each carrier based on the arrival delay time
-flights %>%
-  group_by(UniqueCarrier) %>%
-  top_n(10,ArrDelay) %>%
+
+flights %>% 
+  group_by(UniqueCarrier) %>% 
+  top_n(10, ArrDelay) %>%
   arrange(desc(ArrDelay))
   
 # base R approach to create a new variable Speed (in mph)

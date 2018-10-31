@@ -1,5 +1,7 @@
 #install.packages("ggplot2")
 library(ggplot2)
+library(data.table)
+
 
 setwd("~/R/Rdata")
 # Load Titanic titanicing data for analysis. Open in spreadsheet view.
